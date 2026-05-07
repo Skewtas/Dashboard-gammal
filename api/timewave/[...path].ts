@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getTimewaveToken } from '../_lib/timewaveAuth.js';
+import { getTimewaveToken, forceRefreshTimewaveToken } from '../_lib/timewaveAuth.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const apiKey = process.env.TIMEWAVE_API_KEY;
@@ -33,18 +33,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       method: req.method,
       headers: {
         "Authorization": `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
         "Accept": "application/json",
       },
     };
 
     if (req.method !== 'GET' && req.method !== 'HEAD' && req.body) {
       if (typeof req.body === 'object' && Object.keys(req.body).length > 0) {
+        (fetchConfig.headers as any)["Content-Type"] = "application/json";
         fetchConfig.body = JSON.stringify(req.body);
       }
     }
 
-    const response = await fetch(url.toString(), fetchConfig);
+    let response = await fetch(url.toString(), fetchConfig);
+    
+    // If 403, force refresh token and retry once
+    if (response.status === 403) {
+      console.log(`[Proxy] Timewave 403 on /${endpoint}. Forcing token refresh...`);
+      const newAccessToken = await forceRefreshTimewaveToken();
+      
+      const retryConfig = {
+          ...fetchConfig,
+          headers: {
+              ...fetchConfig.headers,
+              "Authorization": `Bearer ${newAccessToken}`
+          }
+      };
+      
+      response = await fetch(url.toString(), retryConfig as RequestInit);
+    }
+
     const textData = await response.text();
 
     let jsonData;
