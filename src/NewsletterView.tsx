@@ -190,13 +190,25 @@ export default function NewsletterView() {
   // Both mode → "email · phone" so both are visible.
   const formatRecipientLabel = React.useCallback(
     (r: string): string => {
+      // The recipients[] array can hold three shapes:
+      //   1. a raw phone number, e.g. "0701234567" or "+46701234567"
+      //   2. a "synthetic" email like "0701234567@manuell.se" (manual entry)
+      //   3. a real email
+      const isRawPhone = !r.includes("@") && /\d{6,}/.test(r);
       const isManuellPhone = r.includes("@manuell.se");
       const isManuellNoEmail = r.includes("@no-email.stodona.se");
+
       const c = allCustomers.find((cu: any) => cu.email === r);
-      const phone = isManuellPhone
-        ? r.split("@")[0]
-        : (c?.phone ?? null);
-      const displayEmail = isManuellPhone || isManuellNoEmail ? null : (c?.email ?? r);
+
+      const phone = isRawPhone
+        ? r
+        : isManuellPhone
+          ? r.split("@")[0]
+          : (c?.phone ?? null);
+
+      const displayEmail = isRawPhone || isManuellPhone || isManuellNoEmail
+        ? null
+        : (c?.email ?? r);
 
       if (sendChannel === "sms") {
         return phone ?? "(saknar mobil)";
