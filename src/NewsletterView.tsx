@@ -183,6 +183,35 @@ export default function NewsletterView() {
     return list;
   }, [recipients, allCustomers]);
 
+  // Render a recipient chip label according to the active send channel.
+  // SMS mode → show phone if known, else "(saknar mobil)" so the user sees
+  // immediately which contacts won't be reachable.
+  // Email mode → show email (or phone as fallback for manually-entered phones).
+  // Both mode → "email · phone" so both are visible.
+  const formatRecipientLabel = React.useCallback(
+    (r: string): string => {
+      const isManuellPhone = r.includes("@manuell.se");
+      const isManuellNoEmail = r.includes("@no-email.stodona.se");
+      const c = allCustomers.find((cu: any) => cu.email === r);
+      const phone = isManuellPhone
+        ? r.split("@")[0]
+        : (c?.phone ?? null);
+      const displayEmail = isManuellPhone || isManuellNoEmail ? null : (c?.email ?? r);
+
+      if (sendChannel === "sms") {
+        return phone ?? "(saknar mobil)";
+      }
+      if (sendChannel === "email") {
+        return displayEmail ?? phone ?? r;
+      }
+      // both
+      const left = displayEmail ?? "(ingen e-post)";
+      const right = phone ?? "(ingen mobil)";
+      return `${left} · ${right}`;
+    },
+    [allCustomers, sendChannel]
+  );
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const activeImageBlockRef = useRef<string | null>(null);
 
@@ -1233,24 +1262,34 @@ export default function NewsletterView() {
 
               {recipients.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 max-h-[120px] overflow-y-auto">
-                  {recipients.map((email) => (
-                    <span
-                      key={email}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-100 rounded-lg text-[11px] text-brand-muted"
-                    >
-                      {email}
-                      <button
-                        onClick={() =>
-                          setRecipients((prev) =>
-                            prev.filter((e) => e !== email),
-                          )
-                        }
-                        className="text-gray-400 hover:text-red-500"
+                  {recipients.map((email) => {
+                    const label = formatRecipientLabel(email);
+                    const isMissing = label.startsWith("(saknar") || label.includes("(ingen ");
+                    return (
+                      <span
+                        key={email}
+                        title={email}
+                        className={cn(
+                          "inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px]",
+                          isMissing
+                            ? "bg-red-50 text-red-700"
+                            : "bg-gray-100 text-brand-muted"
+                        )}
                       >
-                        <X className="w-3 h-3" />
-                      </button>
-                    </span>
-                  ))}
+                        {label}
+                        <button
+                          onClick={() =>
+                            setRecipients((prev) =>
+                              prev.filter((e) => e !== email),
+                            )
+                          }
+                          className="text-gray-400 hover:text-red-500"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </span>
+                    );
+                  })}
                 </div>
               )}
               {recipients.length > 0 && (
