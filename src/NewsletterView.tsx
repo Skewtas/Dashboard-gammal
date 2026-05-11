@@ -112,6 +112,12 @@ interface SentNewsletter {
 
 const generateId = () => Math.random().toString(36).substring(2, 9);
 
+// Format a Date for <input type="datetime-local"> in local timezone (yyyy-MM-ddTHH:mm).
+function toLocalDateTimeInput(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 export default function NewsletterView() {
   // Editor blocks
   const [blocks, setBlocks] = useState<EditorBlock[]>([
@@ -126,6 +132,22 @@ export default function NewsletterView() {
   // Channel: email, sms, or both
   type SendChannel = "email" | "sms" | "both";
   const [sendChannel, setSendChannel] = useState<SendChannel>("email");
+  // Scheduling
+  const [scheduleEnabled, setScheduleEnabled] = useState<boolean>(false);
+  const [scheduledFor, setScheduledFor] = useState<string>(() => {
+    // Default: 1 hour from now, rounded down to nearest quarter hour
+    const d = new Date(Date.now() + 60 * 60_000);
+    d.setMinutes(Math.floor(d.getMinutes() / 15) * 15, 0, 0);
+    return toLocalDateTimeInput(d);
+  });
+  const [reminderEnabled, setReminderEnabled] = useState<boolean>(false);
+  const [reminderScheduledFor, setReminderScheduledFor] = useState<string>(() => {
+    // Default: 48h from now
+    const d = new Date(Date.now() + 48 * 3600_000);
+    d.setMinutes(0, 0, 0);
+    return toLocalDateTimeInput(d);
+  });
+  const [reminderSubject, setReminderSubject] = useState<string>("");
   const [smsMessage, setSmsMessage] = useState("");
   const [includeOptOutLink, setIncludeOptOutLink] = useState(false);
 
@@ -629,6 +651,11 @@ export default function NewsletterView() {
             htmlContent,
             recipients: emailRecipients,
             category,
+            scheduledFor: scheduleEnabled && scheduledFor ? scheduledFor : null,
+            reminderEnabled,
+            reminderScheduledFor:
+              reminderEnabled && reminderScheduledFor ? reminderScheduledFor : null,
+            reminderSubject: reminderEnabled ? reminderSubject : null,
           }),
         });
         const data = await res.json();
@@ -1458,6 +1485,102 @@ export default function NewsletterView() {
         </div>
       </div>
 
+      {/* Scheduling */}
+      {(sendChannel === "email" || sendChannel === "both") && (
+        <Card>
+          <CardContent className="space-y-4">
+            <h3 className="text-xs font-bold uppercase tracking-widest text-brand-muted flex items-center gap-2">
+              <Clock className="w-3.5 h-3.5" /> Schemaläggning & påminnelse
+            </h3>
+
+            {/* Schedule send */}
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={scheduleEnabled}
+                  onChange={(e) => setScheduleEnabled(e.target.checked)}
+                  className="w-4 h-4 accent-brand-accent"
+                />
+                <span className="font-medium">Skicka senare</span>
+                <span className="text-xs text-gray-400">
+                  (annars skickas det direkt)
+                </span>
+              </label>
+              {scheduleEnabled && (
+                <div className="ml-6 flex items-center gap-3">
+                  <input
+                    type="datetime-local"
+                    value={scheduledFor}
+                    onChange={(e) => setScheduledFor(e.target.value)}
+                    className="px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-brand-accent/30"
+                  />
+                  <span className="text-xs text-gray-500">
+                    Skickas {new Date(scheduledFor).toLocaleString("sv-SE", {
+                      weekday: "short",
+                      day: "numeric",
+                      month: "short",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Reminder for non-openers */}
+            <div className="space-y-2 pt-2 border-t border-gray-100">
+              <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={reminderEnabled}
+                  onChange={(e) => setReminderEnabled(e.target.checked)}
+                  className="w-4 h-4 accent-brand-accent"
+                />
+                <span className="font-medium">
+                  Skicka påminnelse till mottagare som inte öppnat
+                </span>
+              </label>
+              {reminderEnabled && (
+                <div className="ml-6 space-y-2">
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="datetime-local"
+                      value={reminderScheduledFor}
+                      onChange={(e) => setReminderScheduledFor(e.target.value)}
+                      className="px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-brand-accent/30"
+                    />
+                    <span className="text-xs text-gray-500">
+                      Påminnelse skickas{" "}
+                      {new Date(reminderScheduledFor).toLocaleString("sv-SE", {
+                        weekday: "short",
+                        day: "numeric",
+                        month: "short",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </span>
+                  </div>
+                  <input
+                    type="text"
+                    value={reminderSubject}
+                    onChange={(e) => setReminderSubject(e.target.value)}
+                    placeholder={`Ämne för påminnelse (default: "Påminnelse: ${subject || "<ämne>"}")`}
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-brand-accent/30"
+                  />
+                  <p className="text-[11px] text-gray-400 leading-relaxed">
+                    Vi mäter öppningar via en spårningspixel — bilder behöver
+                    laddas i mejlklienten för att räknas som öppnat. Påminnelsen
+                    skickas bara till de som inte öppnat originalet vid den
+                    angivna tiden.
+                  </p>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Send Section */}
       <Card>
         <CardContent className="flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -1520,6 +1643,10 @@ export default function NewsletterView() {
             {isSending ? (
               <span className="flex items-center gap-2">
                 <RefreshCw className="w-4 h-4 animate-spin" /> Skickar...
+              </span>
+            ) : scheduleEnabled ? (
+              <span className="flex items-center gap-2">
+                <Clock className="w-4 h-4" /> Schemalägg utskick
               </span>
             ) : (
               <span className="flex items-center gap-2">
