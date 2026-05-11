@@ -78,7 +78,14 @@ const CardContent = ({
 }) => <div className={cn("p-6", className)}>{children}</div>;
 
 // --- Block types for the editor ---
-type BlockType = "heading" | "text" | "image" | "button" | "divider" | "canva";
+type BlockType =
+  | "heading"
+  | "text"
+  | "image"
+  | "image_text"
+  | "button"
+  | "divider"
+  | "canva";
 
 interface EditorBlock {
   id: string;
@@ -87,6 +94,7 @@ interface EditorBlock {
   imageData?: string;
   buttonUrl?: string;
   buttonColor?: string;
+  imagePosition?: "left" | "right"; // for image_text
 }
 
 interface SentNewsletter {
@@ -266,6 +274,7 @@ export default function NewsletterView() {
       type,
       content: type === "divider" ? "" : "",
       buttonColor: type === "button" ? "#1a1a2e" : undefined,
+      imagePosition: type === "image_text" ? "left" : undefined,
     };
     if (afterId) {
       setBlocks((prev) => {
@@ -520,6 +529,24 @@ export default function NewsletterView() {
             bodyContent += `<div style="margin:0 0 20px;">${contentLinked}</div>`;
           }
           break;
+        case "image_text":
+          if (block.imageData || block.content) {
+            // Email-safe two-column table — fixed widths so Outlook plays nice.
+            // 240px image column, ~280px text column inside the 600px wrapper.
+            const imgCell = block.imageData
+              ? `<img src="${block.imageData}" alt="${block.content ? block.content.slice(0, 40) : "Bild"}" width="240" style="display:block;width:240px;max-width:240px;height:auto;border-radius:10px;" />`
+              : `<div style="width:240px;height:160px;background:#f0ebe0;border-radius:10px;"></div>`;
+            const imgWithLink = block.buttonUrl
+              ? `<a href="${block.buttonUrl}" target="_blank" style="display:block;text-decoration:none;">${imgCell}</a>`
+              : imgCell;
+            const textCell = `<div style="font-size:15px;line-height:1.7;color:#444;font-family:'Inter','Helvetica Neue',Arial,sans-serif;">${(block.content || "").replace(/\n/g, "<br/>")}</div>`;
+            const cells =
+              block.imagePosition === "right"
+                ? `<td valign="top" style="padding:0 24px 0 0;">${textCell}</td><td valign="top" width="240" style="width:240px;">${imgWithLink}</td>`
+                : `<td valign="top" width="240" style="width:240px;padding:0 24px 0 0;">${imgWithLink}</td><td valign="top">${textCell}</td>`;
+            bodyContent += `<div style="padding:0 32px;margin:0 0 24px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;"><tr>${cells}</tr></table></div>`;
+          }
+          break;
         case "button":
           if (block.content && block.buttonUrl) {
             bodyContent += `<div style="padding:0 32px;text-align:center;margin:24px 0;"><a href="${block.buttonUrl}" target="_blank" style="display:inline-block;padding:14px 36px;background:${block.buttonColor || "#1a1a2e"};color:#fff;border-radius:10px;text-decoration:none;font-weight:600;font-size:14px;letter-spacing:0.5px;font-family:'Inter','Helvetica Neue',Arial,sans-serif;">${block.content}</a></div>`;
@@ -698,9 +725,13 @@ export default function NewsletterView() {
                 ? "Text"
                 : block.type === "image"
                   ? "Bild"
-                  : block.type === "button"
-                    ? "Knapp"
-                    : "Avdelare"}
+                  : block.type === "image_text"
+                    ? "Bild + Text"
+                    : block.type === "canva"
+                      ? "Helsidesbild"
+                      : block.type === "button"
+                        ? "Knapp"
+                        : "Avdelare"}
           </span>
         </div>
         <div className="flex items-center gap-0.5">
@@ -813,6 +844,109 @@ export default function NewsletterView() {
                   }}
                 />
               </label>
+            )}
+          </div>
+        )}
+
+        {block.type === "image_text" && (
+          <div className="space-y-2">
+            {/* Position toggle */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-400">Bilden:</span>
+              <div className="inline-flex bg-gray-100 rounded-lg p-0.5 text-xs">
+                <button
+                  type="button"
+                  onClick={() =>
+                    updateBlock(block.id, { imagePosition: "left" })
+                  }
+                  className={cn(
+                    "px-3 py-1 rounded-md",
+                    (block.imagePosition ?? "left") === "left"
+                      ? "bg-white shadow text-brand-dark"
+                      : "text-gray-500",
+                  )}
+                >
+                  Vänster
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    updateBlock(block.id, { imagePosition: "right" })
+                  }
+                  className={cn(
+                    "px-3 py-1 rounded-md",
+                    block.imagePosition === "right"
+                      ? "bg-white shadow text-brand-dark"
+                      : "text-gray-500",
+                  )}
+                >
+                  Höger
+                </button>
+              </div>
+            </div>
+            {/* Layout — image upload + textarea side-by-side, mirroring email layout */}
+            <div
+              className={cn(
+                "flex gap-3",
+                block.imagePosition === "right" && "flex-row-reverse",
+              )}
+            >
+              <div className="w-40 flex-shrink-0">
+                {block.imageData ? (
+                  <div className="relative">
+                    <img
+                      src={block.imageData}
+                      alt=""
+                      className="w-full h-auto rounded-lg max-h-[160px] object-cover"
+                    />
+                    <button
+                      onClick={() =>
+                        updateBlock(block.id, {
+                          imageData: undefined,
+                          buttonUrl: "",
+                        })
+                      }
+                      className="absolute top-1 right-1 p-1 bg-white/90 rounded shadow-sm hover:bg-red-50"
+                    >
+                      <Trash2 className="w-3 h-3 text-red-500" />
+                    </button>
+                  </div>
+                ) : (
+                  <label className="flex flex-col items-center justify-center h-32 border-2 border-dashed border-gray-200 rounded-lg cursor-pointer hover:border-gray-300 hover:bg-gray-50/50 transition-all">
+                    <ImageIcon className="w-6 h-6 text-gray-300 mb-1" />
+                    <span className="text-[11px] text-gray-400">Bild</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handleFileSelect(file, block.id);
+                      }}
+                    />
+                  </label>
+                )}
+              </div>
+              <textarea
+                value={block.content}
+                onChange={(e) =>
+                  updateBlock(block.id, { content: e.target.value })
+                }
+                placeholder="Text som visas bredvid bilden…"
+                rows={6}
+                className="flex-1 text-sm text-brand-dark placeholder:text-gray-300 border border-gray-200 rounded-lg p-3 outline-none bg-white resize-none leading-relaxed focus:ring-1 focus:ring-brand-accent/30"
+              />
+            </div>
+            {block.imageData && (
+              <input
+                type="url"
+                value={block.buttonUrl || ""}
+                onChange={(e) =>
+                  updateBlock(block.id, { buttonUrl: e.target.value })
+                }
+                placeholder="Länk på bilden (valfritt)"
+                className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-brand-dark focus:outline-none focus:ring-1 focus:ring-brand-accent/30"
+              />
             )}
           </div>
         )}
@@ -1054,6 +1188,13 @@ export default function NewsletterView() {
                     className="flex items-center gap-1 px-2.5 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-xs text-brand-muted hover:bg-gray-100 transition-colors"
                   >
                     <ImageIcon className="w-3 h-3" /> Bild
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => addBlock("image_text")}
+                    className="flex items-center gap-1 px-2.5 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-xs text-brand-muted hover:bg-gray-100 transition-colors"
+                  >
+                    <ImageIcon className="w-3 h-3" /> Bild + Text
                   </button>
                   <button
                     type="button"
