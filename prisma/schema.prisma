@@ -759,6 +759,7 @@ model Newsletter {
   imageData       String?  @db.Text
   embedUrl        String?
   htmlContent     String?  @db.Text
+  blocks          Json?    // Editor blocks snapshot — enables "use as template"
 
   // Scheduling
   scheduledFor    DateTime?

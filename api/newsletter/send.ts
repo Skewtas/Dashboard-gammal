@@ -12,6 +12,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     htmlContent,
     recipients,
     category,
+    blocks,
     // Scheduling
     scheduledFor,
     reminderEnabled,
@@ -25,6 +26,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     htmlContent?: string;
     recipients: string[];
     category?: string;
+    blocks?: unknown;
     scheduledFor?: string | null;
     reminderEnabled?: boolean;
     reminderScheduledFor?: string | null;
@@ -79,6 +81,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       imageData: imageData || null,
       embedUrl: embedUrl || null,
       htmlContent: htmlContent || null,
+      blocks: (blocks as any) ?? undefined,
       recipients: validRecipients,
       status: isScheduled ? 'scheduled' : 'sending',
       scheduledFor: scheduledAt ?? undefined,

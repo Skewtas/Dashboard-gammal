@@ -1218,6 +1218,7 @@ import customersHandler from './api/newsletter/customers';
 import sendHandler from './api/newsletter/send';
 import smsHandler from './api/newsletter/sms';
 import resendHandler from './api/newsletter/[id]/resend';
+import templateHandler from './api/newsletter/[id]/template';
 import templatesHandler from './api/automations/templates';
 
 app.get("/api/newsletter/track/:id/:emailBase64", (req, res) => trackHandler(req as any, res as any));
@@ -1227,6 +1228,7 @@ app.get("/api/newsletter/customers", (req, res) => customersHandler(req as any, 
 app.post("/api/newsletter/send", (req, res) => sendHandler(req as any, res as any));
 app.post("/api/newsletter/sms", (req, res) => smsHandler(req as any, res as any));
 app.post("/api/newsletter/:id/resend", (req, res) => resendHandler(req as any, res as any));
+app.get("/api/newsletter/:id/template", (req, res) => templateHandler(req as any, res as any));
 app.all("/api/automations/templates", (req, res) => templatesHandler(req as any, res as any));
 
 // API error handler (must be registered after all /api routes)

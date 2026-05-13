@@ -24,6 +24,7 @@ import {
   Italic,
   Smartphone,
   Mail,
+  Copy,
 } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
@@ -651,6 +652,7 @@ export default function NewsletterView() {
             htmlContent,
             recipients: emailRecipients,
             category,
+            blocks,
             scheduledFor: scheduleEnabled && scheduledFor ? scheduledFor : null,
             reminderEnabled,
             reminderScheduledFor:
@@ -732,6 +734,45 @@ export default function NewsletterView() {
       setSendResult({ success: false, message: "Kunde inte nå servern." });
     } finally {
       setIsSending(false);
+    }
+  };
+
+  // Load a previously-sent newsletter back into the editor as a template.
+  const handleDuplicate = async (id: string) => {
+    if (
+      blocks.some((b) => b.content || b.imageData) &&
+      !window.confirm(
+        "Editorn har osparat innehåll. Vill du ersätta det med detta nyhetsbrev?",
+      )
+    ) {
+      return;
+    }
+    try {
+      const res = await fetch(`/api/newsletter/${id}/template`);
+      const data = await res.json();
+      if (!res.ok) {
+        setSendResult({ success: false, message: data.error || "Kunde inte hämta mallen." });
+        return;
+      }
+      setSubject(`Kopia: ${data.subject || ""}`);
+      setCategory(data.category || "Allmänt");
+      if (Array.isArray(data.blocks) && data.blocks.length > 0) {
+        setBlocks(data.blocks);
+      } else {
+        setBlocks([
+          { id: generateId(), type: "heading", content: data.subject || "" },
+          { id: generateId(), type: "text", content: data.introText || "" },
+        ]);
+      }
+      // Scroll up to editor and clear send-result so the user notices the swap
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      setSendResult({
+        success: true,
+        message:
+          "Nyhetsbrevet laddat i editorn som en kopia. Redigera fritt och skicka som vanligt.",
+      });
+    } catch (err) {
+      setSendResult({ success: false, message: "Kunde inte nå servern." });
     }
   };
 
@@ -1776,20 +1817,29 @@ export default function NewsletterView() {
                         {item.sentAt}
                       </td>
                       <td className="px-5 py-4 text-right">
-                        {unopenedCount > 0 ? (
+                        <div className="inline-flex items-center gap-2">
                           <button
-                            onClick={() => handleResend(item.id, item.subject)}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-brand-bg text-brand-dark hover:bg-brand-accent hover:text-white font-medium rounded-lg text-xs transition-colors"
+                            onClick={() => handleDuplicate(item.id)}
+                            title="Använd som mall — laddar in i editorn för redigering"
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 text-brand-dark hover:bg-brand-dark hover:text-white font-medium rounded-lg text-xs transition-colors"
                           >
-                            <Bell className="w-3.5 h-3.5" /> Påminnelse (
-                            {unopenedCount})
+                            <Copy className="w-3.5 h-3.5" /> Kopiera
                           </button>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-gray-50 text-gray-400 rounded-md text-xs font-medium">
-                            <CheckCircle className="w-3.5 h-3.5" /> Alla har
-                            öppnat
-                          </span>
-                        )}
+                          {unopenedCount > 0 ? (
+                            <button
+                              onClick={() => handleResend(item.id, item.subject)}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-brand-bg text-brand-dark hover:bg-brand-accent hover:text-white font-medium rounded-lg text-xs transition-colors"
+                            >
+                              <Bell className="w-3.5 h-3.5" /> Påminnelse (
+                              {unopenedCount})
+                            </button>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-gray-50 text-gray-400 rounded-md text-xs font-medium">
+                              <CheckCircle className="w-3.5 h-3.5" /> Alla har
+                              öppnat
+                            </span>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
