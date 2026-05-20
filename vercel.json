@@ -18,6 +18,19 @@
   ],
   "rewrites": [
     { "source": "/auth/callback", "destination": "/api/auth/callback" },
+    { "source": "/api/clients/:path*", "destination": "/api/hf-handler" },
+    { "source": "/api/employees/:path*", "destination": "/api/hf-handler" },
+    { "source": "/api/teams/:path*", "destination": "/api/hf-handler" },
+    { "source": "/api/services/:path*", "destination": "/api/hf-handler" },
+    { "source": "/api/agreements/:path*", "destination": "/api/hf-handler" },
+    { "source": "/api/missions/:path*", "destination": "/api/hf-handler" },
+    { "source": "/api/time/:path*", "destination": "/api/hf-handler" },
+    { "source": "/api/invoices/:path*", "destination": "/api/hf-handler" },
+    { "source": "/api/payroll/:path*", "destination": "/api/hf-handler" },
+    { "source": "/api/tickets/:path*", "destination": "/api/hf-handler" },
+    { "source": "/api/jobs/:path*", "destination": "/api/hf-handler" },
+    { "source": "/api/import/:path*", "destination": "/api/hf-handler" },
+    { "source": "/api/ops/:path*", "destination": "/api/hf-handler" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]
 }
