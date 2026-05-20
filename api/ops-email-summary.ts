@@ -5,7 +5,7 @@
  * Recipients: env OPS_SUMMARY_EMAILS (comma-separated). Defaults below.
  */
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { prisma } from '../_lib/prisma.js';
+import { prisma } from './_lib/prisma.js';
 
 const DEFAULT_RECIPIENTS = ['mikaela.wigert@stodona.se'];
 
