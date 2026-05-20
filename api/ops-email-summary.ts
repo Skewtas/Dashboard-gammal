@@ -202,7 +202,7 @@ function buildHtml(goals: any[], tasks: any[]): string {
       <h2 style="margin:24px 0 8px;font-size:18px;color:#1a1a2e;">${escapeHtml(title)}</h2>
       <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #eae4d9;border-radius:10px;border-collapse:separate;overflow:hidden;">
         <tr style="background:#faf8f5;">
-          ${showOwner ? '<th style="text-align:left;padding:8px 12px;font-size:11px;text-transform:uppercase;color:#999;letter-spacing:0.5px;">Person</th>' : ''}
+          ${showOwner ? '<th style="text-align:left;padding:8px 12px;font-size:11px;text-transform:uppercase;color:#999;letter-spacing:0.5px;">Ansvarig</th>' : ''}
           <th style="text-align:left;padding:8px 12px;font-size:11px;text-transform:uppercase;color:#999;letter-spacing:0.5px;">Uppgift</th>
           <th style="text-align:right;padding:8px 12px;font-size:11px;text-transform:uppercase;color:#999;letter-spacing:0.5px;">Status</th>
           <th style="text-align:right;padding:8px 12px;font-size:11px;text-transform:uppercase;color:#999;letter-spacing:0.5px;">Deadline</th>
@@ -232,8 +232,8 @@ h1, h2, h3 { font-family: 'Playfair Display', Georgia, serif !important; }
       <tr><td style="padding:8px 32px 32px;">
         ${goalTable(monthGoals, 'Månadsmål — ' + new Date().toLocaleDateString('sv-SE', { month: 'long', year: 'numeric' }))}
         ${goalTable(weekGoals, 'Veckomål')}
-        ${taskTable(pipeline, 'Pipeline — kunder & anställda', false)}
-        ${taskTable(actions, 'Actionlista', false)}
+        ${taskTable(pipeline, 'Pipeline — kunder & anställda', true)}
+        ${taskTable(actions, 'Actionlista', true)}
         ${taskTable(personal, 'Personliga tasks', true)}
         <p style="margin:32px 0 0;text-align:center;">
           <a href="${process.env.APP_URL || 'https://head-of.vercel.app'}" style="display:inline-block;padding:12px 28px;background:#1a1a2e;color:#fff;border-radius:10px;text-decoration:none;font-weight:600;font-size:13px;letter-spacing:0.5px;">Öppna HeadOf →</a>
