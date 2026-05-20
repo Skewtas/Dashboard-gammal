@@ -263,7 +263,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
       }
 
-      if (m.type !== 'reccurent' && m.client?.id) {
+      // Online-bookings: look for explicit markers (source / workordergroup
+      // name / tags) — fall back to 0 instead of counting every non-recurring
+      // mission like the old code did (that inflated the metric massively).
+      const candidateSources = [
+        m.source,
+        m.created_via,
+        m.client?.source,
+        m.workorder?.workordergroup?.name,
+        m.workordergroup?.name,
+        ...(Array.isArray(m.tags) ? m.tags.map((t: any) => t?.name).filter(Boolean) : []),
+      ]
+        .filter(Boolean)
+        .map((s: any) => String(s).toLowerCase());
+      if (
+        m.client?.id &&
+        candidateSources.some(
+          (s) =>
+            s.includes('online') ||
+            s.includes('boka.stodona') ||
+            s.includes('webform') ||
+            s === 'web'
+        )
+      ) {
         onlineBookings++;
       }
     });

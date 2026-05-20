@@ -987,8 +987,31 @@ app.get("/api/timewave-summary/missions", async (req, res) => {
         }
       }
 
-      // Count online bookings (non-recurring = single bookings)
-      if (m.type !== 'reccurent' && m.client?.id) {
+      // Count online bookings. The previous "m.type !== 'reccurent'" rule was
+      // wrong — it counted every single-shot mission (incl. Boka hem,
+      // Bokningsagenten, telefon-bokningar, samarbeten). We don't yet know
+      // which Timewave field identifies a true "boka.stodona.se" booking, so
+      // for now look for explicit markers and otherwise stay at 0.
+      const candidateSources = [
+        m.source,
+        m.created_via,
+        m.client?.source,
+        m.workorder?.workordergroup?.name,
+        m.workordergroup?.name,
+        ...(Array.isArray(m.tags) ? m.tags.map((t: any) => t?.name).filter(Boolean) : []),
+      ]
+        .filter(Boolean)
+        .map((s: any) => String(s).toLowerCase());
+      if (
+        m.client?.id &&
+        candidateSources.some(
+          (s) =>
+            s.includes('online') ||
+            s.includes('boka.stodona') ||
+            s.includes('webform') ||
+            s === 'web'
+        )
+      ) {
         onlineBookings++;
       }
     });
