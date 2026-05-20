@@ -1,14 +1,21 @@
-import { RRule, rrulestr } from 'rrule';
+// `rrule` is a CommonJS package — its named exports aren't reachable through
+// pure ESM `import { RRule } from 'rrule'` when bundled on Vercel. Default-
+// import the namespace and pull off the names we need.
+import rrulePkg from 'rrule';
+const { RRule, rrulestr } = rrulePkg as unknown as {
+  RRule: any;
+  rrulestr: (s: string) => any;
+};
 
 /**
  * Expand an RRULE string into concrete dates between [from, to].
  * Handles both raw "FREQ=...;..." and full "DTSTART:..." strings.
  */
 export function expandRrule(rrule: string, from: Date, to: Date, dtstart: Date): Date[] {
-  let rule: RRule;
+  let rule: any;
   try {
     if (rrule.includes('DTSTART')) {
-      rule = rrulestr(rrule) as RRule;
+      rule = rrulestr(rrule);
     } else {
       rule = RRule.fromString(`DTSTART:${toIcal(dtstart)}\nRRULE:${rrule}`);
     }
