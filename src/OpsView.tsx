@@ -1,15 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  AlertTriangle,
   Calendar as CalendarIcon,
-  CheckCircle2,
-  Clock,
-  Pencil,
+  Check,
+  ChevronDown,
+  ChevronRight,
   Plus,
   RotateCw,
   Target,
   Trash2,
-  Users,
   X,
 } from 'lucide-react';
 import { api } from './lib/api';
@@ -18,9 +16,13 @@ import { api } from './lib/api';
 // Types
 // ─────────────────────────────────────────────────────────────────────────
 
+type Period = 'YEAR' | 'MONTH' | 'WEEK';
+type Section = 'PIPELINE' | 'ACTION' | 'PERSONAL';
+type Status = 'OPEN' | 'IN_PROGRESS' | 'WAITING' | 'DONE' | 'CANCELLED';
+
 interface OpsGoal {
   id: number;
-  periodType: 'YEAR' | 'MONTH' | 'WEEK';
+  periodType: Period;
   periodStart: string;
   periodEnd: string;
   metricKey: string;
@@ -28,21 +30,19 @@ interface OpsGoal {
   targetValue: number;
   actualOverride: number | null;
   unit: string | null;
-  notes: string | null;
   sortOrder: number;
 }
 
 interface OpsTask {
   id: number;
-  section: 'PIPELINE' | 'ACTION' | 'PERSONAL';
+  section: Section;
   owner: string | null;
   title: string;
   nextStep: string | null;
   relatedTo: string | null;
-  status: 'OPEN' | 'IN_PROGRESS' | 'WAITING' | 'DONE' | 'CANCELLED';
+  status: Status;
   deadline: string | null;
   notes: string | null;
-  sortOrder: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -50,35 +50,12 @@ interface OpsTask {
 // ─────────────────────────────────────────────────────────────────────────
 
 export default function OpsView() {
-  const [tab, setTab] = useState<'goals' | 'pipeline' | 'actions' | 'personal'>('goals');
-
   return (
-    <div className="space-y-6">
-      <div className="border-b border-gray-100 -mx-8 px-8">
-        {[
-          { key: 'goals', label: 'Mål', icon: Target },
-          { key: 'pipeline', label: 'Pipeline', icon: Users },
-          { key: 'actions', label: 'Actionlista', icon: AlertTriangle },
-          { key: 'personal', label: 'Personliga tasks', icon: CheckCircle2 },
-        ].map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key as any)}
-            className={`inline-flex items-center gap-1.5 px-4 py-3 text-sm font-medium border-b-2 transition ${
-              tab === t.key
-                ? 'border-brand-accent text-brand-accent'
-                : 'border-transparent text-gray-500 hover:text-gray-800'
-            }`}
-          >
-            <t.icon className="w-3.5 h-3.5" />
-            {t.label}
-          </button>
-        ))}
-      </div>
-      {tab === 'goals' && <GoalsPanel />}
-      {tab === 'pipeline' && <TasksPanel section="PIPELINE" title="Kunder & anställda i pipen" />}
-      {tab === 'actions' && <TasksPanel section="ACTION" title="Actionlista" />}
-      {tab === 'personal' && <TasksPanel section="PERSONAL" title="Personliga tasks" />}
+    <div className="space-y-8 max-w-4xl">
+      <GoalsBlock />
+      <TasksBlock section="PIPELINE" title="Pipeline" />
+      <TasksBlock section="ACTION" title="Actionlista" />
+      <TasksBlock section="PERSONAL" title="Personliga tasks" groupByOwner />
     </div>
   );
 }
@@ -87,393 +64,312 @@ export default function OpsView() {
 // Goals
 // ─────────────────────────────────────────────────────────────────────────
 
-function GoalsPanel() {
+function GoalsBlock() {
   const [goals, setGoals] = useState<OpsGoal[]>([]);
   const [loading, setLoading] = useState(true);
-  const [period, setPeriod] = useState<'YEAR' | 'MONTH' | 'WEEK'>('MONTH');
-  const [adding, setAdding] = useState(false);
-  const [editingId, setEditingId] = useState<number | null>(null);
 
   const reload = useCallback(async () => {
     setLoading(true);
     try {
-      const q = new URLSearchParams({ periodType: period });
-      const data = await api<OpsGoal[]>(`/api/ops/goals?${q}`);
-      setGoals(data);
+      // Fetch both month and week in parallel
+      const [m, w] = await Promise.all([
+        api<OpsGoal[]>(`/api/ops/goals?periodType=MONTH`),
+        api<OpsGoal[]>(`/api/ops/goals?periodType=WEEK`),
+      ]);
+      setGoals([...m, ...w]);
     } finally {
       setLoading(false);
     }
-  }, [period]);
+  }, []);
 
   useEffect(() => {
     reload();
   }, [reload]);
 
   const seed = async () => {
-    if (
-      !confirm(
-        'Importera årsmål och månadsmål från Excel-arket? (Befintliga rader bevaras.)'
-      )
-    )
-      return;
-    const r = await api<{ created: number; skipped: number }>(`/api/ops/seed`, {
-      method: 'POST',
-    });
+    if (!confirm('Importera årsmål + månadsmål från Excel?')) return;
+    const r = await api<{ created: number; skipped: number }>(`/api/ops/seed`, { method: 'POST' });
     alert(`Skapade ${r.created} mål, hoppade över ${r.skipped} som redan fanns.`);
     reload();
   };
 
-  // Group by periodStart
-  const grouped = useMemo(() => {
-    const m = new Map<string, OpsGoal[]>();
-    for (const g of goals) {
-      const k = g.periodStart.slice(0, 10);
-      if (!m.has(k)) m.set(k, []);
-      m.get(k)!.push(g);
-    }
-    return Array.from(m.entries()).sort(([a], [b]) => (a < b ? 1 : -1));
-  }, [goals]);
+  // Filter to CURRENT month + week
+  const now = new Date();
+  const currentMonth = goals.filter(
+    (g) =>
+      g.periodType === 'MONTH' &&
+      new Date(g.periodStart) <= now &&
+      now <= new Date(g.periodEnd)
+  );
+  const currentWeek = goals.filter((g) => {
+    if (g.periodType !== 'WEEK') return false;
+    return new Date(g.periodStart) <= now && now <= new Date(g.periodEnd);
+  });
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-3">
-        <div className="flex bg-gray-100 rounded-lg p-0.5 text-xs">
-          {(['YEAR', 'MONTH', 'WEEK'] as const).map((p) => (
-            <button
-              key={p}
-              onClick={() => setPeriod(p)}
-              className={`px-3 py-1.5 rounded-md ${
-                period === p ? 'bg-white shadow text-brand-dark' : 'text-gray-500'
-              }`}
-            >
-              {p === 'YEAR' ? 'År' : p === 'MONTH' ? 'Månad' : 'Vecka'}
-            </button>
-          ))}
-        </div>
-        <button
-          onClick={() => setAdding(true)}
-          className="flex items-center gap-1 px-3 py-1.5 bg-brand-accent text-white rounded-lg text-xs font-medium"
-        >
-          <Plus className="w-3 h-3" /> Nytt mål
-        </button>
+    <section className="space-y-4">
+      <header className="flex items-center gap-2">
+        <Target className="w-4 h-4 text-brand-accent" />
+        <h2 className="text-lg font-serif text-brand-dark">Mål</h2>
         <button
           onClick={seed}
-          className="ml-auto flex items-center gap-1 px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg text-xs font-medium"
+          className="ml-auto flex items-center gap-1 text-xs text-gray-500 hover:text-brand-dark"
         >
           <RotateCw className="w-3 h-3" /> Importera Excel-mål
         </button>
-      </div>
+      </header>
 
-      {loading ? (
-        <div className="text-sm text-gray-400">Laddar...</div>
-      ) : grouped.length === 0 ? (
-        <div className="p-6 bg-gray-50 rounded-xl text-sm text-gray-500 text-center">
-          Inga mål för {period === 'YEAR' ? 'året' : period === 'MONTH' ? 'månaden' : 'veckan'}.
-          Klicka <em>Importera Excel-mål</em> för att fylla på från Mikaelas ark.
-        </div>
-      ) : (
-        grouped.map(([periodStart, items]) => (
-          <div
-            key={periodStart}
-            className="bg-white border border-gray-200 rounded-xl overflow-hidden"
-          >
-            <div className="px-4 py-2 bg-gray-50 border-b border-gray-100 text-xs font-medium text-gray-600 flex items-center gap-2">
-              <CalendarIcon className="w-3 h-3" />
-              {formatPeriodLabel(periodStart, items[0].periodEnd, period)}
-            </div>
-            <table className="w-full text-sm">
-              <thead className="text-[10px] text-gray-400 uppercase tracking-wider">
-                <tr>
-                  <th className="text-left px-4 py-2">Mål</th>
-                  <th className="text-right px-4 py-2">Mål-värde</th>
-                  <th className="text-right px-4 py-2">Utfall</th>
-                  <th className="text-right px-4 py-2">Kvar</th>
-                  <th className="w-24"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {items
-                  .sort((a, b) => a.sortOrder - b.sortOrder)
-                  .map((g) => {
-                    const actual = g.actualOverride ?? 0;
-                    const remaining = g.targetValue - actual;
-                    const pct = g.targetValue
-                      ? Math.min(100, Math.max(0, (actual / g.targetValue) * 100))
-                      : 0;
-                    return (
-                      <tr key={g.id} className="border-t border-gray-100">
-                        <td className="px-4 py-3">
-                          <div className="font-medium text-gray-900">
-                            {g.metricLabel}
-                          </div>
-                          <div className="w-full h-1.5 bg-gray-100 rounded-full mt-2 overflow-hidden">
-                            <div
-                              className="h-full bg-brand-accent rounded-full transition-all"
-                              style={{ width: `${pct}%` }}
-                            />
-                          </div>
-                        </td>
-                        <td className="px-4 py-3 text-right font-medium">
-                          {formatValue(g.targetValue, g.unit)}
-                        </td>
-                        <td className="px-4 py-3 text-right text-gray-600">
-                          {g.actualOverride == null ? (
-                            <span className="text-gray-300">—</span>
-                          ) : (
-                            formatValue(actual, g.unit)
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-right text-orange-600 font-medium">
-                          {g.actualOverride == null ? (
-                            <span className="text-gray-300">—</span>
-                          ) : (
-                            formatValue(Math.max(0, remaining), g.unit)
-                          )}
-                        </td>
-                        <td className="px-2 py-3 text-right">
-                          <button
-                            onClick={() => setEditingId(g.id)}
-                            className="p-1 text-gray-400 hover:text-brand-dark"
-                          >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={async () => {
-                              if (!confirm(`Ta bort målet "${g.metricLabel}"?`)) return;
-                              await api(`/api/ops/goals/${g.id}`, { method: 'DELETE' });
-                              reload();
-                            }}
-                            className="p-1 text-gray-400 hover:text-red-500"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-              </tbody>
-            </table>
-          </div>
-        ))
-      )}
-
-      {(adding || editingId !== null) && (
-        <GoalEditor
-          defaultPeriodType={period}
-          goal={editingId != null ? goals.find((g) => g.id === editingId) ?? null : null}
-          onClose={() => {
-            setAdding(false);
-            setEditingId(null);
-          }}
-          onSaved={() => {
-            setAdding(false);
-            setEditingId(null);
-            reload();
-          }}
-        />
-      )}
-    </div>
+      <GoalGroup
+        label={`Den här månaden — ${now.toLocaleDateString('sv-SE', { month: 'long', year: 'numeric' })}`}
+        items={currentMonth}
+        loading={loading}
+        onReload={reload}
+        defaultPeriod="MONTH"
+      />
+      <GoalGroup
+        label={`Den här veckan — v.${isoWeek(now)}`}
+        items={currentWeek}
+        loading={loading}
+        onReload={reload}
+        defaultPeriod="WEEK"
+      />
+    </section>
   );
 }
 
-function GoalEditor({
-  goal,
-  defaultPeriodType,
-  onClose,
-  onSaved,
+function GoalGroup({
+  label,
+  items,
+  loading,
+  onReload,
+  defaultPeriod,
 }: {
-  goal: OpsGoal | null;
-  defaultPeriodType: 'YEAR' | 'MONTH' | 'WEEK';
-  onClose: () => void;
-  onSaved: () => void;
+  label: string;
+  items: OpsGoal[];
+  loading: boolean;
+  onReload: () => void;
+  defaultPeriod: Period;
 }) {
-  const isEdit = !!goal;
-  const [periodType, setPeriodType] = useState<'YEAR' | 'MONTH' | 'WEEK'>(
-    goal?.periodType ?? defaultPeriodType
-  );
-  const [periodStart, setPeriodStart] = useState<string>(
-    goal ? goal.periodStart.slice(0, 10) : new Date().toISOString().slice(0, 10)
-  );
-  const [periodEnd, setPeriodEnd] = useState<string>(
-    goal
-      ? goal.periodEnd.slice(0, 10)
-      : new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toISOString().slice(0, 10)
-  );
-  const [metricLabel, setMetricLabel] = useState(goal?.metricLabel ?? '');
-  const [metricKey, setMetricKey] = useState(goal?.metricKey ?? 'custom');
-  const [targetValue, setTargetValue] = useState<string>(String(goal?.targetValue ?? ''));
-  const [actualOverride, setActualOverride] = useState<string>(
-    goal?.actualOverride != null ? String(goal.actualOverride) : ''
-  );
-  const [unit, setUnit] = useState(goal?.unit ?? 'kr');
-  const [notes, setNotes] = useState(goal?.notes ?? '');
-  const [saving, setSaving] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState({ label: '', target: '', unit: 'kr' as 'kr' | 'st' | '%' });
 
-  const save = async () => {
-    setSaving(true);
-    try {
-      const body = {
-        periodType,
-        periodStart,
-        periodEnd,
-        metricLabel,
-        metricKey,
-        targetValue: Number(targetValue.replace(',', '.')) || 0,
-        actualOverride: actualOverride.trim() === '' ? null : Number(actualOverride.replace(',', '.')),
-        unit,
-        notes: notes || null,
-      };
-      if (isEdit) {
-        await api(`/api/ops/goals/${goal!.id}`, { method: 'PUT', body: JSON.stringify(body) });
-      } else {
-        await api(`/api/ops/goals`, { method: 'POST', body: JSON.stringify(body) });
-      }
-      onSaved();
-    } catch (e) {
-      alert(`Fel: ${(e as Error).message}`);
-    } finally {
-      setSaving(false);
+  const addGoal = async () => {
+    if (!draft.label.trim() || !draft.target.trim()) return;
+    const now = new Date();
+    let ps: Date, pe: Date;
+    if (defaultPeriod === 'MONTH') {
+      ps = new Date(now.getFullYear(), now.getMonth(), 1);
+      pe = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    } else {
+      ps = startOfISOWeek(now);
+      pe = new Date(ps);
+      pe.setDate(pe.getDate() + 6);
     }
+    await api(`/api/ops/goals`, {
+      method: 'POST',
+      body: JSON.stringify({
+        periodType: defaultPeriod,
+        periodStart: ps.toISOString().slice(0, 10),
+        periodEnd: pe.toISOString().slice(0, 10),
+        metricKey: 'custom',
+        metricLabel: draft.label.trim(),
+        targetValue: Number(draft.target.replace(',', '.')) || 0,
+        unit: draft.unit,
+        sortOrder: items.length + 1,
+      }),
+    });
+    setDraft({ label: '', target: '', unit: draft.unit });
+    setAdding(false);
+    onReload();
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 space-y-3 max-h-[90vh] overflow-auto">
-        <div className="flex justify-between items-center">
-          <h3 className="font-serif text-lg">{isEdit ? 'Redigera mål' : 'Nytt mål'}</h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-800">
-            <X className="w-5 h-5" />
-          </button>
+    <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+      <div className="px-4 py-2 bg-gray-50 border-b border-gray-100 text-xs font-medium text-gray-600 flex items-center gap-2">
+        <CalendarIcon className="w-3 h-3" />
+        {label}
+      </div>
+      {loading ? (
+        <div className="px-4 py-6 text-sm text-gray-400">Laddar…</div>
+      ) : items.length === 0 && !adding ? (
+        <div className="px-4 py-6 text-sm text-gray-400 italic text-center">
+          Inga mål satta för denna period.
         </div>
-        <div className="grid grid-cols-3 gap-2">
-          {(['YEAR', 'MONTH', 'WEEK'] as const).map((p) => (
-            <button
-              key={p}
-              onClick={() => setPeriodType(p)}
-              className={`py-1.5 rounded-lg text-xs ${
-                periodType === p ? 'bg-brand-accent text-white' : 'bg-gray-100 text-gray-700'
-              }`}
-            >
-              {p === 'YEAR' ? 'År' : p === 'MONTH' ? 'Månad' : 'Vecka'}
-            </button>
-          ))}
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <label className="text-xs text-gray-500">
-            Från
-            <input
-              type="date"
-              value={periodStart}
-              onChange={(e) => setPeriodStart(e.target.value)}
-              className="w-full mt-1 px-2 py-1.5 border border-gray-200 rounded-lg text-sm"
-            />
-          </label>
-          <label className="text-xs text-gray-500">
-            Till
-            <input
-              type="date"
-              value={periodEnd}
-              onChange={(e) => setPeriodEnd(e.target.value)}
-              className="w-full mt-1 px-2 py-1.5 border border-gray-200 rounded-lg text-sm"
-            />
-          </label>
-        </div>
-        <input
-          value={metricLabel}
-          onChange={(e) => setMetricLabel(e.target.value)}
-          placeholder='Etikett, t.ex. "Fakturerad försäljning"'
-          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
-        />
-        <div className="grid grid-cols-2 gap-2">
+      ) : (
+        items
+          .sort((a, b) => a.sortOrder - b.sortOrder)
+          .map((g) => <GoalRow key={g.id} goal={g} onReload={onReload} />)
+      )}
+      {adding ? (
+        <div className="px-4 py-3 flex items-center gap-2 border-t border-gray-100 bg-gray-50/50">
           <input
-            value={targetValue}
-            onChange={(e) => setTargetValue(e.target.value)}
-            placeholder="Mål-värde"
-            className="px-3 py-2 border border-gray-200 rounded-lg text-sm"
+            autoFocus
+            value={draft.label}
+            onChange={(e) => setDraft({ ...draft, label: e.target.value })}
+            onKeyDown={(e) => e.key === 'Enter' && addGoal()}
+            placeholder="Etikett (t.ex. Fakturerad försäljning)"
+            className="flex-1 text-sm bg-transparent border-b border-gray-200 outline-none focus:border-brand-accent py-1"
           />
           <input
-            value={actualOverride}
-            onChange={(e) => setActualOverride(e.target.value)}
-            placeholder="Utfall (valfritt)"
-            className="px-3 py-2 border border-gray-200 rounded-lg text-sm"
+            value={draft.target}
+            onChange={(e) => setDraft({ ...draft, target: e.target.value })}
+            onKeyDown={(e) => e.key === 'Enter' && addGoal()}
+            placeholder="Mål"
+            className="w-28 text-sm bg-transparent border-b border-gray-200 outline-none focus:border-brand-accent py-1 text-right"
           />
-        </div>
-        <div className="grid grid-cols-3 gap-2">
-          {['kr', 'st', '%'].map((u) => (
-            <button
-              key={u}
-              onClick={() => setUnit(u)}
-              className={`py-1.5 rounded-lg text-xs ${
-                unit === u ? 'bg-brand-accent text-white' : 'bg-gray-100 text-gray-700'
-              }`}
-            >
-              {u}
-            </button>
-          ))}
-        </div>
-        <textarea
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          placeholder="Anteckningar"
-          rows={2}
-          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
-        />
-        <div className="flex justify-end gap-2 pt-2">
-          <button onClick={onClose} className="px-3 py-1.5 text-sm text-gray-600">
-            Avbryt
+          <select
+            value={draft.unit}
+            onChange={(e) => setDraft({ ...draft, unit: e.target.value as any })}
+            className="text-xs bg-transparent border-b border-gray-200 outline-none py-1"
+          >
+            <option value="kr">kr</option>
+            <option value="st">st</option>
+            <option value="%">%</option>
+          </select>
+          <button onClick={addGoal} className="p-1 text-emerald-600 hover:bg-emerald-50 rounded">
+            <Check className="w-4 h-4" />
           </button>
           <button
-            onClick={save}
-            disabled={saving || !metricLabel}
-            className="px-3 py-1.5 bg-brand-accent text-white rounded-lg text-sm disabled:opacity-50"
+            onClick={() => {
+              setAdding(false);
+              setDraft({ label: '', target: '', unit: draft.unit });
+            }}
+            className="p-1 text-gray-400 hover:bg-gray-100 rounded"
           >
-            {saving ? 'Sparar...' : 'Spara'}
+            <X className="w-4 h-4" />
           </button>
         </div>
+      ) : (
+        <button
+          onClick={() => setAdding(true)}
+          className="px-4 py-2 w-full text-left text-xs text-gray-400 hover:text-brand-accent border-t border-gray-100 flex items-center gap-1"
+        >
+          <Plus className="w-3 h-3" /> Lägg till mål
+        </button>
+      )}
+    </div>
+  );
+}
+
+function GoalRow({ goal, onReload }: { goal: OpsGoal; onReload: () => void }) {
+  const [editingActual, setEditingActual] = useState(false);
+  const [draftActual, setDraftActual] = useState(
+    goal.actualOverride != null ? String(goal.actualOverride) : ''
+  );
+
+  const actual = goal.actualOverride ?? 0;
+  const remaining = Math.max(0, goal.targetValue - actual);
+  const pct = goal.targetValue ? Math.min(100, (actual / goal.targetValue) * 100) : 0;
+
+  const saveActual = async () => {
+    const value = draftActual.trim() === '' ? null : Number(draftActual.replace(',', '.'));
+    await api(`/api/ops/goals/${goal.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ actualOverride: value }),
+    });
+    setEditingActual(false);
+    onReload();
+  };
+
+  return (
+    <div className="px-4 py-3 border-t border-gray-100 hover:bg-gray-50/50">
+      <div className="flex items-center gap-3 text-sm">
+        <div className="flex-1 min-w-0">
+          <div className="font-medium text-brand-dark truncate">{goal.metricLabel}</div>
+          <div className="h-1.5 bg-gray-100 rounded-full mt-1.5 overflow-hidden">
+            <div
+              className="h-full bg-brand-accent rounded-full transition-all"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+        </div>
+        <div className="text-right tabular-nums">
+          {editingActual ? (
+            <input
+              autoFocus
+              value={draftActual}
+              onChange={(e) => setDraftActual(e.target.value)}
+              onBlur={saveActual}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') saveActual();
+                if (e.key === 'Escape') setEditingActual(false);
+              }}
+              className="w-24 text-sm text-right bg-yellow-50 border border-brand-accent/50 outline-none rounded px-2 py-0.5"
+              placeholder="Utfall"
+            />
+          ) : (
+            <button
+              onClick={() => {
+                setDraftActual(goal.actualOverride != null ? String(goal.actualOverride) : '');
+                setEditingActual(true);
+              }}
+              className="text-sm text-gray-700 hover:text-brand-accent group"
+              title="Klicka för att uppdatera utfall"
+            >
+              {goal.actualOverride != null ? (
+                <span className="font-medium">{fmtNum(actual)}</span>
+              ) : (
+                <span className="text-gray-300 italic">utfall…</span>
+              )}
+              <span className="text-gray-400 ml-1">/ {fmtNum(goal.targetValue)}</span>{' '}
+              <span className="text-xs text-gray-400">{goal.unit ?? ''}</span>
+            </button>
+          )}
+          <div className="text-[10px] text-orange-600 mt-0.5">
+            {goal.actualOverride != null ? `Kvar: ${fmtNum(remaining)} ${goal.unit ?? ''}` : ' '}
+          </div>
+        </div>
+        <button
+          onClick={async () => {
+            if (!confirm(`Ta bort målet "${goal.metricLabel}"?`)) return;
+            await api(`/api/ops/goals/${goal.id}`, { method: 'DELETE' });
+            onReload();
+          }}
+          className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-red-500"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
       </div>
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Tasks (Pipeline / Action / Personal)
+// Tasks
 // ─────────────────────────────────────────────────────────────────────────
 
-function TasksPanel({
+function TasksBlock({
   section,
   title,
+  groupByOwner = false,
 }: {
-  section: 'PIPELINE' | 'ACTION' | 'PERSONAL';
+  section: Section;
   title: string;
+  groupByOwner?: boolean;
 }) {
   const [tasks, setTasks] = useState<OpsTask[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filterStatus, setFilterStatus] = useState<string>('open'); // open | all
-  const [showAdd, setShowAdd] = useState(false);
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [quickAddText, setQuickAddText] = useState('');
+  const [showDone, setShowDone] = useState(false);
+  const [quickText, setQuickText] = useState('');
   const [quickAdding, setQuickAdding] = useState(false);
 
-  // Parses "Ringa Lista, Tenita, 31 maj" into { title, owner, deadline }.
-  // Comma-separated parts. The 1st is always the title; the 2nd is an owner
-  // unless it looks like a date (then it's the deadline). The 3rd is treated
-  // as a deadline.
-  const parseQuickAdd = (raw: string) => {
-    const parts = raw.split(',').map((s) => s.trim()).filter(Boolean);
-    if (parts.length === 0) return null;
-    const title = parts[0];
-    let owner: string | null = null;
-    let deadline: string | null = null;
-    for (const p of parts.slice(1)) {
-      const date = tryParseSwedishDate(p);
-      if (date && !deadline) deadline = date;
-      else if (!owner) owner = p;
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await api<OpsTask[]>(`/api/ops/tasks?section=${section}`);
+      setTasks(data);
+    } finally {
+      setLoading(false);
     }
-    return { title, owner, deadline };
-  };
+  }, [section]);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  const parsed = useMemo(() => parseQuickAdd(quickText), [quickText]);
 
   const quickAdd = async () => {
-    const parsed = parseQuickAdd(quickAddText);
     if (!parsed) return;
     setQuickAdding(true);
     try {
@@ -487,8 +383,8 @@ function TasksPanel({
           status: 'OPEN',
         }),
       });
-      setQuickAddText('');
-      await reload();
+      setQuickText('');
+      reload();
     } catch (e) {
       alert(`Fel: ${(e as Error).message}`);
     } finally {
@@ -496,273 +392,250 @@ function TasksPanel({
     }
   };
 
-  const reload = useCallback(async () => {
-    setLoading(true);
-    try {
-      const q = new URLSearchParams({ section });
-      const data = await api<OpsTask[]>(`/api/ops/tasks?${q}`);
-      setTasks(data);
-    } finally {
-      setLoading(false);
+  const visible = tasks.filter(
+    (t) => showDone || (t.status !== 'DONE' && t.status !== 'CANCELLED')
+  );
+  const doneCount = tasks.filter((t) => t.status === 'DONE' || t.status === 'CANCELLED').length;
+
+  const groups: Array<[string | null, OpsTask[]]> = useMemo(() => {
+    if (!groupByOwner) return [[null, visible]];
+    const m = new Map<string, OpsTask[]>();
+    for (const t of visible) {
+      const k = t.owner || 'Övriga';
+      if (!m.has(k)) m.set(k, []);
+      m.get(k)!.push(t);
     }
-  }, [section]);
-
-  useEffect(() => {
-    reload();
-  }, [reload]);
-
-  const setStatus = async (id: number, status: OpsTask['status']) => {
-    await api(`/api/ops/tasks/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify({ status }),
-    });
-    reload();
-  };
-
-  // Group by owner for PERSONAL, by status for others
-  const groups = useMemo(() => {
-    const visible = tasks.filter((t) =>
-      filterStatus === 'all'
-        ? true
-        : t.status !== 'DONE' && t.status !== 'CANCELLED'
-    );
-    if (section === 'PERSONAL') {
-      const m = new Map<string, OpsTask[]>();
-      for (const t of visible) {
-        const k = t.owner || 'Övriga';
-        if (!m.has(k)) m.set(k, []);
-        m.get(k)!.push(t);
-      }
-      return Array.from(m.entries());
-    }
-    return [['Alla', visible] as [string, OpsTask[]]];
-  }, [tasks, section, filterStatus]);
+    return Array.from(m.entries());
+  }, [visible, groupByOwner]);
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-3">
-        <h3 className="text-sm font-medium text-gray-700">{title}</h3>
-        <div className="ml-auto flex bg-gray-100 rounded-lg p-0.5 text-xs">
-          {[
-            { value: 'open', label: 'Aktiva' },
-            { value: 'all', label: 'Alla' },
-          ].map((f) => (
-            <button
-              key={f.value}
-              onClick={() => setFilterStatus(f.value)}
-              className={`px-3 py-1 rounded-md ${
-                filterStatus === f.value ? 'bg-white shadow text-brand-dark' : 'text-gray-500'
-              }`}
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
-      </div>
+    <section className="space-y-2">
+      <header className="flex items-center gap-3">
+        <h2 className="text-lg font-serif text-brand-dark">{title}</h2>
+        {doneCount > 0 && (
+          <button
+            onClick={() => setShowDone((v) => !v)}
+            className="text-xs text-gray-400 hover:text-brand-dark"
+          >
+            {showDone ? `Dölj klara (${doneCount})` : `Visa klara (${doneCount})`}
+          </button>
+        )}
+      </header>
 
-      {/* Quick add — type "Titel, Ansvarig, Deadline" and press Enter */}
-      {(() => {
-        const parsed = parseQuickAdd(quickAddText);
-        return (
-          <div className="bg-white border border-gray-200 rounded-xl p-3 space-y-1">
-            <div className="flex items-center gap-2">
-              <Plus className="w-4 h-4 text-gray-400 flex-shrink-0" />
-              <input
-                type="text"
-                value={quickAddText}
-                onChange={(e) => setQuickAddText(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    quickAdd();
-                  }
-                }}
-                placeholder='Ex: "Ringa Lista, Tenita, 31 maj" → Enter'
-                disabled={quickAdding}
-                autoFocus={false}
-                className="flex-1 text-sm border-none outline-none bg-transparent text-brand-dark placeholder:text-gray-400"
-              />
-              <button
-                onClick={() => setShowAdd(true)}
-                disabled={quickAdding}
-                className="text-[11px] text-gray-400 hover:text-gray-600 underline whitespace-nowrap"
-                title="Öppna fullständigt formulär (nästa steg, kopplad till, mer)"
-              >
-                fler fält
-              </button>
+      <div className="bg-white border border-gray-200 rounded-xl">
+        {/* Quick-add — always visible at the top */}
+        <div className="px-4 py-3 flex items-center gap-2 border-b border-gray-100">
+          <Plus className="w-4 h-4 text-gray-400 flex-shrink-0" />
+          <input
+            value={quickText}
+            onChange={(e) => setQuickText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                quickAdd();
+              }
+            }}
+            placeholder='Ex: "Ringa Lista, Tenita, 31 maj" → Enter'
+            disabled={quickAdding}
+            className="flex-1 text-sm bg-transparent border-none outline-none text-brand-dark placeholder:text-gray-400"
+          />
+          {parsed && (parsed.owner || parsed.deadline) && (
+            <span className="text-[11px] text-gray-500 whitespace-nowrap">
+              {parsed.owner && <span className="mr-2">▸ {parsed.owner}</span>}
+              {parsed.deadline && (
+                <span>
+                  ▸{' '}
+                  {new Date(parsed.deadline).toLocaleDateString('sv-SE', {
+                    day: 'numeric',
+                    month: 'short',
+                  })}
+                </span>
+              )}
+            </span>
+          )}
+        </div>
+
+        {loading ? (
+          <div className="px-4 py-6 text-sm text-gray-400">Laddar…</div>
+        ) : visible.length === 0 ? (
+          <div className="px-4 py-6 text-sm text-gray-400 italic text-center">
+            Inget att visa.
+          </div>
+        ) : (
+          groups.map(([owner, list], i) => (
+            <div key={owner ?? 'all'}>
+              {groupByOwner && (
+                <div className="px-4 py-1.5 text-[10px] uppercase tracking-wider text-gray-400 bg-gray-50/50 border-t border-gray-100">
+                  {owner}
+                </div>
+              )}
+              {list.map((t) => (
+                <TaskRow key={t.id} task={t} onReload={reload} showOwner={!groupByOwner} />
+              ))}
             </div>
-            {parsed && (parsed.owner || parsed.deadline) && (
-              <div className="pl-6 text-[11px] text-gray-500">
-                <span className="text-gray-400">Tolkas som: </span>
-                <strong className="text-brand-dark">{parsed.title}</strong>
-                {parsed.owner && (
-                  <>
-                    {' · '}ansvarig <strong className="text-brand-dark">{parsed.owner}</strong>
-                  </>
-                )}
-                {parsed.deadline && (
-                  <>
-                    {' · '}deadline{' '}
-                    <strong className="text-brand-dark">
-                      {new Date(parsed.deadline).toLocaleDateString('sv-SE', {
-                        day: 'numeric',
-                        month: 'short',
-                        year: 'numeric',
-                      })}
-                    </strong>
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-        );
-      })()}
-
-      {loading ? (
-        <div className="text-sm text-gray-400">Laddar...</div>
-      ) : groups.length === 0 || groups.every(([, list]) => list.length === 0) ? (
-        <div className="p-6 bg-gray-50 rounded-xl text-sm text-gray-500 text-center">
-          Inga {title.toLowerCase()} än. Skriv ovan och tryck <em>Enter</em>.
-        </div>
-      ) : (
-        groups.map(([owner, list]) => (
-          <div key={owner} className="space-y-2">
-            {section === 'PERSONAL' && (
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-brand-muted">
-                {owner}
-              </h4>
-            )}
-            {list.length === 0 ? (
-              <p className="text-sm text-gray-400">Inga.</p>
-            ) : (
-              <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-                {list.map((t, i) => (
-                  <TaskRow
-                    key={t.id}
-                    task={t}
-                    showOwner={section !== 'PERSONAL'}
-                    onStatus={(s) => setStatus(t.id, s)}
-                    onEdit={() => setEditingId(t.id)}
-                    onDelete={async () => {
-                      if (!confirm(`Ta bort "${t.title}"?`)) return;
-                      await api(`/api/ops/tasks/${t.id}`, { method: 'DELETE' });
-                      reload();
-                    }}
-                    isLast={i === list.length - 1}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-        ))
-      )}
-
-      {(showAdd || editingId !== null) && (
-        <TaskEditor
-          section={section}
-          task={editingId != null ? tasks.find((t) => t.id === editingId) ?? null : null}
-          onClose={() => {
-            setShowAdd(false);
-            setEditingId(null);
-          }}
-          onSaved={() => {
-            setShowAdd(false);
-            setEditingId(null);
-            reload();
-          }}
-        />
-      )}
-    </div>
+          ))
+        )}
+      </div>
+    </section>
   );
 }
 
 function TaskRow({
   task,
+  onReload,
   showOwner,
-  onStatus,
-  onEdit,
-  onDelete,
-  isLast,
 }: {
   task: OpsTask;
+  onReload: () => void;
   showOwner: boolean;
-  onStatus: (s: OpsTask['status']) => void;
-  onEdit: () => void;
-  onDelete: () => void;
-  isLast: boolean;
 }) {
-  const done = task.status === 'DONE' || task.status === 'CANCELLED';
+  const [expanded, setExpanded] = useState(false);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [draftTitle, setDraftTitle] = useState(task.title);
+
+  const isDone = task.status === 'DONE' || task.status === 'CANCELLED';
+
+  const toggleDone = async () => {
+    await api(`/api/ops/tasks/${task.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ status: task.status === 'DONE' ? 'OPEN' : 'DONE' }),
+    });
+    onReload();
+  };
+
+  const setStatus = async (status: Status) => {
+    await api(`/api/ops/tasks/${task.id}`, { method: 'PUT', body: JSON.stringify({ status }) });
+    onReload();
+  };
+
+  const saveTitle = async () => {
+    if (draftTitle.trim() && draftTitle !== task.title) {
+      await api(`/api/ops/tasks/${task.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ title: draftTitle.trim() }),
+      });
+    }
+    setEditingTitle(false);
+    onReload();
+  };
+
+  const remove = async () => {
+    if (!confirm(`Ta bort "${task.title}"?`)) return;
+    await api(`/api/ops/tasks/${task.id}`, { method: 'DELETE' });
+    onReload();
+  };
+
+  const hasDetails = task.nextStep || task.notes || task.relatedTo;
+
   return (
-    <div className={`p-4 ${!isLast ? 'border-b border-gray-100' : ''} ${done ? 'opacity-60' : ''}`}>
-      <div className="flex items-start gap-3">
+    <div className={`border-t border-gray-100 group ${isDone ? 'opacity-50' : ''}`}>
+      <div className="px-4 py-2.5 flex items-center gap-3">
         <button
-          onClick={() => onStatus(task.status === 'DONE' ? 'OPEN' : 'DONE')}
-          className={`mt-0.5 w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center ${
+          onClick={toggleDone}
+          className={`w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center ${
             task.status === 'DONE'
               ? 'bg-emerald-500 border-emerald-500 text-white'
-              : 'border-gray-300 hover:border-gray-500'
+              : 'border-gray-300 hover:border-brand-accent'
           }`}
         >
-          {task.status === 'DONE' && <CheckCircle2 className="w-3 h-3" />}
+          {task.status === 'DONE' && <Check className="w-3 h-3" />}
         </button>
+
+        {hasDetails && (
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            className="p-0.5 text-gray-400 hover:text-brand-dark"
+          >
+            {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+          </button>
+        )}
+
         <div className="flex-1 min-w-0">
-          <div className={`text-sm font-medium ${done ? 'line-through text-gray-500' : 'text-gray-900'}`}>
-            {task.title}
-            {task.relatedTo && (
-              <span className="ml-2 text-xs text-gray-400 font-normal">· {task.relatedTo}</span>
-            )}
-          </div>
+          {editingTitle ? (
+            <input
+              autoFocus
+              value={draftTitle}
+              onChange={(e) => setDraftTitle(e.target.value)}
+              onBlur={saveTitle}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') saveTitle();
+                if (e.key === 'Escape') {
+                  setDraftTitle(task.title);
+                  setEditingTitle(false);
+                }
+              }}
+              className="w-full text-sm bg-transparent border-b border-brand-accent outline-none py-0.5"
+            />
+          ) : (
+            <button
+              onClick={() => setEditingTitle(true)}
+              className={`text-sm text-left ${isDone ? 'line-through' : ''} text-brand-dark hover:text-brand-accent`}
+              title="Klicka för att redigera"
+            >
+              {task.title}
+              {task.relatedTo && (
+                <span className="ml-2 text-xs text-gray-400 font-normal">· {task.relatedTo}</span>
+              )}
+            </button>
+          )}
+        </div>
+
+        {showOwner && task.owner && (
+          <span className="text-xs text-gray-600 px-2 py-0.5 bg-gray-100 rounded">{task.owner}</span>
+        )}
+        {task.deadline && (
+          <span className={`text-xs ${isOverdue(task.deadline, isDone) ? 'text-red-600' : 'text-gray-500'}`}>
+            {new Date(task.deadline).toLocaleDateString('sv-SE', {
+              day: 'numeric',
+              month: 'short',
+            })}
+          </span>
+        )}
+        {task.status !== 'OPEN' && task.status !== 'DONE' && (
+          <StatusBadge status={task.status} />
+        )}
+
+        <select
+          value={task.status}
+          onChange={(e) => setStatus(e.target.value as Status)}
+          className="opacity-0 group-hover:opacity-100 text-[10px] px-1 py-0.5 border border-gray-200 rounded bg-white text-gray-600"
+          title="Status"
+        >
+          <option value="OPEN">Öppen</option>
+          <option value="IN_PROGRESS">Pågår</option>
+          <option value="WAITING">Väntar</option>
+          <option value="DONE">Klar</option>
+          <option value="CANCELLED">Avbruten</option>
+        </select>
+        <button
+          onClick={remove}
+          className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-red-500"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      </div>
+      {expanded && hasDetails && (
+        <div className="px-12 pb-3 -mt-1 text-xs text-gray-600 space-y-1">
           {task.nextStep && (
-            <p className="text-xs text-gray-600 mt-1 whitespace-pre-wrap">{task.nextStep}</p>
+            <div>
+              <span className="text-gray-400">Nästa steg: </span>
+              {task.nextStep}
+            </div>
           )}
           {task.notes && (
-            <p className="text-xs text-gray-400 mt-1 whitespace-pre-wrap">{task.notes}</p>
+            <div>
+              <span className="text-gray-400">Anteckningar: </span>
+              {task.notes}
+            </div>
           )}
-          <div className="flex items-center gap-3 mt-2 text-[11px]">
-            {showOwner && task.owner && (
-              <span className="px-2 py-0.5 bg-gray-100 rounded text-gray-700">{task.owner}</span>
-            )}
-            <StatusBadge status={task.status} />
-            {task.deadline && (
-              <span className="text-gray-500 flex items-center gap-1">
-                <Clock className="w-3 h-3" />
-                {new Date(task.deadline).toLocaleDateString('sv-SE', {
-                  day: 'numeric',
-                  month: 'short',
-                })}
-              </span>
-            )}
-          </div>
         </div>
-        <div className="flex items-start gap-0.5">
-          <select
-            value={task.status}
-            onChange={(e) => onStatus(e.target.value as OpsTask['status'])}
-            className="text-[11px] px-1.5 py-1 border border-gray-200 rounded bg-white"
-          >
-            <option value="OPEN">Öppen</option>
-            <option value="IN_PROGRESS">Pågår</option>
-            <option value="WAITING">Väntar</option>
-            <option value="DONE">Klar</option>
-            <option value="CANCELLED">Avbruten</option>
-          </select>
-          <button
-            onClick={onEdit}
-            className="p-1 text-gray-400 hover:text-brand-dark"
-          >
-            <Pencil className="w-3.5 h-3.5" />
-          </button>
-          <button onClick={onDelete} className="p-1 text-gray-400 hover:text-red-500">
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      </div>
+      )}
     </div>
   );
 }
 
-function StatusBadge({ status }: { status: OpsTask['status'] }) {
-  const map: Record<OpsTask['status'], { label: string; cls: string }> = {
+function StatusBadge({ status }: { status: Status }) {
+  const map: Record<Status, { label: string; cls: string }> = {
     OPEN: { label: 'Öppen', cls: 'bg-gray-100 text-gray-700' },
     IN_PROGRESS: { label: 'Pågår', cls: 'bg-blue-100 text-blue-800' },
     WAITING: { label: 'Väntar', cls: 'bg-amber-100 text-amber-800' },
@@ -770,244 +643,136 @@ function StatusBadge({ status }: { status: OpsTask['status'] }) {
     CANCELLED: { label: 'Avbruten', cls: 'bg-gray-100 text-gray-400' },
   };
   const v = map[status];
-  return <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${v.cls}`}>{v.label}</span>;
-}
-
-function TaskEditor({
-  section,
-  task,
-  onClose,
-  onSaved,
-}: {
-  section: 'PIPELINE' | 'ACTION' | 'PERSONAL';
-  task: OpsTask | null;
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const isEdit = !!task;
-  const [title, setTitle] = useState(task?.title ?? '');
-  const [owner, setOwner] = useState(task?.owner ?? '');
-  const [relatedTo, setRelatedTo] = useState(task?.relatedTo ?? '');
-  const [nextStep, setNextStep] = useState(task?.nextStep ?? '');
-  const [status, setStatus] = useState<OpsTask['status']>(task?.status ?? 'OPEN');
-  const [deadline, setDeadline] = useState<string>(task?.deadline ? task.deadline.slice(0, 10) : '');
-  const [notes, setNotes] = useState(task?.notes ?? '');
-  const [saving, setSaving] = useState(false);
-
-  const save = async () => {
-    setSaving(true);
-    try {
-      const body = {
-        section,
-        title,
-        owner: owner || null,
-        relatedTo: relatedTo || null,
-        nextStep: nextStep || null,
-        status,
-        deadline: deadline || null,
-        notes: notes || null,
-      };
-      if (isEdit) {
-        await api(`/api/ops/tasks/${task!.id}`, { method: 'PUT', body: JSON.stringify(body) });
-      } else {
-        await api(`/api/ops/tasks`, { method: 'POST', body: JSON.stringify(body) });
-      }
-      onSaved();
-    } catch (e) {
-      alert(`Fel: ${(e as Error).message}`);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 space-y-3 max-h-[90vh] overflow-auto">
-        <div className="flex justify-between items-center">
-          <h3 className="font-serif text-lg">
-            {isEdit ? 'Redigera' : 'Ny'} {section === 'PIPELINE' ? 'pipeline-rad' : section === 'ACTION' ? 'action' : 'personlig task'}
-          </h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-800">
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-        <input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="Titel"
-          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm font-medium"
-        />
-        <div className="grid grid-cols-2 gap-2">
-          <input
-            value={owner}
-            onChange={(e) => setOwner(e.target.value)}
-            placeholder={section === 'PERSONAL' ? 'Person (t.ex. Mikaela)' : 'Ansvarig'}
-            className="px-3 py-2 border border-gray-200 rounded-lg text-sm"
-          />
-          <input
-            value={relatedTo}
-            onChange={(e) => setRelatedTo(e.target.value)}
-            placeholder="Kopplad till (kund/anställd)"
-            className="px-3 py-2 border border-gray-200 rounded-lg text-sm"
-          />
-        </div>
-        <textarea
-          value={nextStep}
-          onChange={(e) => setNextStep(e.target.value)}
-          placeholder="Nästa steg"
-          rows={2}
-          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
-        />
-        <div className="grid grid-cols-2 gap-2">
-          <select
-            value={status}
-            onChange={(e) => setStatus(e.target.value as OpsTask['status'])}
-            className="px-3 py-2 border border-gray-200 rounded-lg text-sm"
-          >
-            <option value="OPEN">Öppen</option>
-            <option value="IN_PROGRESS">Pågår</option>
-            <option value="WAITING">Väntar</option>
-            <option value="DONE">Klar</option>
-            <option value="CANCELLED">Avbruten</option>
-          </select>
-          <input
-            type="date"
-            value={deadline}
-            onChange={(e) => setDeadline(e.target.value)}
-            className="px-3 py-2 border border-gray-200 rounded-lg text-sm"
-          />
-        </div>
-        <textarea
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          placeholder="Anteckningar"
-          rows={2}
-          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
-        />
-        <div className="flex justify-end gap-2 pt-2">
-          <button onClick={onClose} className="px-3 py-1.5 text-sm text-gray-600">
-            Avbryt
-          </button>
-          <button
-            onClick={save}
-            disabled={saving || !title.trim()}
-            className="px-3 py-1.5 bg-brand-accent text-white rounded-lg text-sm disabled:opacity-50"
-          >
-            {saving ? 'Sparar...' : 'Spara'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
+  return <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${v.cls}`}>{v.label}</span>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────
 
-function formatValue(v: number, unit: string | null): string {
-  const formatted = new Intl.NumberFormat('sv-SE').format(v);
-  return `${formatted} ${unit ?? ''}`.trim();
-}
-
-function formatPeriodLabel(start: string, end: string, type: 'YEAR' | 'MONTH' | 'WEEK'): string {
-  const s = new Date(start);
-  const e = new Date(end);
-  if (type === 'YEAR') {
-    return `${s.toLocaleDateString('sv-SE', { month: 'short', year: 'numeric' })} – ${e.toLocaleDateString(
-      'sv-SE',
-      { month: 'short', year: 'numeric' }
-    )}`;
+function parseQuickAdd(raw: string) {
+  const parts = raw.split(',').map((s) => s.trim()).filter(Boolean);
+  if (parts.length === 0) return null;
+  const title = parts[0];
+  let owner: string | null = null;
+  let deadline: string | null = null;
+  for (const p of parts.slice(1)) {
+    const date = tryParseSwedishDate(p);
+    if (date && !deadline) deadline = date;
+    else if (!owner) owner = p;
   }
-  if (type === 'MONTH') {
-    return s.toLocaleDateString('sv-SE', { month: 'long', year: 'numeric' });
+  return { title, owner, deadline };
+}
+
+/**
+ * Parse strings like "31 maj", "31 maj 2026", "31/5", "31/5/2026",
+ * "2026-05-31", "imorgon", "idag", "måndag" into YYYY-MM-DD.
+ */
+function tryParseSwedishDate(s: string): string | null {
+  const t = s.trim().toLowerCase();
+  if (!t) return null;
+
+  // ISO
+  if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(t)) {
+    const [y, m, d] = t.split('-').map(Number);
+    return iso(new Date(y, m - 1, d));
   }
-  return `Vecka ${getISOWeek(s)} (${s.toLocaleDateString('sv-SE', {
-    day: 'numeric',
-    month: 'short',
-  })} – ${e.toLocaleDateString('sv-SE', { day: 'numeric', month: 'short' })})`;
-}
 
-function getISOWeek(d: Date): number {
-  const date = new Date(d.getTime());
-  date.setHours(0, 0, 0, 0);
-  date.setDate(date.getDate() + 3 - ((date.getDay() + 6) % 7));
-  const week1 = new Date(date.getFullYear(), 0, 4);
-  return 1 + Math.round(((date.getTime() - week1.getTime()) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7);
-}
+  // d/m or d/m/yy(yy)
+  const sl = t.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?$/);
+  if (sl) {
+    const d = +sl[1];
+    const m = +sl[2] - 1;
+    let y = sl[3] ? +sl[3] : new Date().getFullYear();
+    if (y < 100) y += 2000;
+    return iso(new Date(y, m, d));
+  }
 
-// Try to parse a Swedish-style date string. Returns "YYYY-MM-DD" or null.
-// Accepts:
-//   "31 maj"           → 31 may current year (or next year if past)
-//   "31 maj 2026"      → 31 may 2026
-//   "31/5"             → 31 may current year
-//   "31/5/2026"        → 31 may 2026
-//   "2026-05-31"       → as-is
-//   "imorgon", "idag"  → relative
-function tryParseSwedishDate(raw: string): string | null {
-  const s = raw.trim().toLowerCase();
-  if (!s) return null;
-
-  // ISO yyyy-mm-dd
-  const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-  if (iso) {
-    const y = +iso[1], m = +iso[2], d = +iso[3];
-    return fmtIso(new Date(y, m - 1, d));
+  // "31 maj" / "31 maj 2026"
+  const months: Record<string, number> = {
+    jan: 0, januari: 0, feb: 1, februari: 1, mar: 2, mars: 2,
+    apr: 3, april: 3, maj: 4, jun: 5, juni: 5, jul: 6, juli: 6,
+    aug: 7, augusti: 7, sep: 8, sept: 8, september: 8, okt: 9,
+    oktober: 9, nov: 10, november: 10, dec: 11, december: 11,
+  };
+  const sw = t.match(/^(\d{1,2})\s+([a-zåäö]+)\s*(\d{4})?$/);
+  if (sw) {
+    const d = +sw[1];
+    const mKey = sw[2];
+    if (mKey in months) {
+      const m = months[mKey];
+      const y = sw[3] ? +sw[3] : (() => {
+        const now = new Date();
+        const candidate = new Date(now.getFullYear(), m, d);
+        return candidate < now ? now.getFullYear() + 1 : now.getFullYear();
+      })();
+      return iso(new Date(y, m, d));
+    }
   }
 
   // Relative
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  if (s === 'idag' || s === 'today') return fmtIso(today);
-  if (s === 'imorgon' || s === 'tomorrow') {
-    const t = new Date(today);
-    t.setDate(t.getDate() + 1);
-    return fmtIso(t);
+  const now = new Date();
+  if (t === 'idag' || t === 'today') return iso(now);
+  if (t === 'imorgon' || t === 'i morgon' || t === 'tomorrow') {
+    const x = new Date(now);
+    x.setDate(x.getDate() + 1);
+    return iso(x);
+  }
+  if (t === 'iövermorgon' || t === 'i övermorgon') {
+    const x = new Date(now);
+    x.setDate(x.getDate() + 2);
+    return iso(x);
   }
 
-  // Numeric "31/5" or "31/5/2026"
-  const slash = s.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?$/);
-  if (slash) {
-    const d = +slash[1];
-    const m = +slash[2];
-    let y = slash[3] ? +slash[3] : today.getFullYear();
-    if (y < 100) y += 2000;
-    const result = new Date(y, m - 1, d);
-    if (!slash[3] && result < today) result.setFullYear(y + 1);
-    return fmtIso(result);
-  }
-
-  // "31 maj" or "31 maj 2026"
-  const months: Record<string, number> = {
-    januari: 0, jan: 0,
-    februari: 1, feb: 1,
-    mars: 2, mar: 2,
-    april: 3, apr: 3,
-    maj: 4,
-    juni: 5, jun: 5,
-    juli: 6, jul: 6,
-    augusti: 7, aug: 7,
-    september: 8, sep: 8, sept: 8,
-    oktober: 9, okt: 9,
-    november: 10, nov: 10,
-    december: 11, dec: 11,
+  // Weekday name → next occurrence
+  const weekdays: Record<string, number> = {
+    söndag: 0, mån: 1, måndag: 1, tis: 2, tisdag: 2, ons: 3, onsdag: 3,
+    tor: 4, torsdag: 4, fre: 5, fredag: 5, lör: 6, lördag: 6, sön: 0,
   };
-  const word = s.match(/^(\d{1,2})\s+([a-zåäö]+)(?:\s+(\d{2,4}))?$/);
-  if (word) {
-    const d = +word[1];
-    const m = months[word[2]];
-    if (m === undefined) return null;
-    let y = word[3] ? +word[3] : today.getFullYear();
-    if (y < 100) y += 2000;
-    const result = new Date(y, m, d);
-    if (!word[3] && result < today) result.setFullYear(y + 1);
-    return fmtIso(result);
+  if (t in weekdays) {
+    const target = weekdays[t];
+    const x = new Date(now);
+    const diff = (target - x.getDay() + 7) % 7 || 7;
+    x.setDate(x.getDate() + diff);
+    return iso(x);
   }
 
   return null;
 }
 
-function fmtIso(d: Date): string {
+function iso(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function fmtNum(v: number): string {
+  return new Intl.NumberFormat('sv-SE').format(Math.round(v));
+}
+
+function isoWeek(d: Date): number {
+  const x = new Date(d.getTime());
+  x.setHours(0, 0, 0, 0);
+  x.setDate(x.getDate() + 3 - ((x.getDay() + 6) % 7));
+  const w1 = new Date(x.getFullYear(), 0, 4);
+  return (
+    1 +
+    Math.round(((x.getTime() - w1.getTime()) / 86400000 - 3 + ((w1.getDay() + 6) % 7)) / 7)
+  );
+}
+
+function startOfISOWeek(d: Date): Date {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  const dow = (x.getDay() + 6) % 7;
+  x.setDate(x.getDate() - dow);
+  return x;
+}
+
+function isOverdue(dateStr: string, done: boolean): boolean {
+  if (done) return false;
+  const d = new Date(dateStr);
+  d.setHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return d < today;
 }
