@@ -1594,7 +1594,22 @@ export default function App() {
               </h2>
             </header>
             <div className="p-8 max-w-7xl mx-auto">
-              {activeTab === 'overview' && <OverviewView />}
+              {activeTab === 'overview' && (
+                <div className="grid grid-cols-1 2xl:grid-cols-[minmax(0,1fr)_minmax(0,420px)] gap-6 items-start">
+                  <OverviewView />
+                  <aside className="2xl:sticky 2xl:top-4 2xl:max-h-[calc(100vh-6rem)] 2xl:overflow-y-auto 2xl:pr-1">
+                    <div className="border-l-2 border-brand-accent/20 2xl:pl-5">
+                      <div className="flex items-center gap-2 mb-4">
+                        <Target className="w-4 h-4 text-brand-accent" />
+                        <h3 className="text-xs font-bold uppercase tracking-widest text-brand-muted">
+                          Veckouppföljning
+                        </h3>
+                      </div>
+                      <OpsView />
+                    </div>
+                  </aside>
+                </div>
+              )}
               {activeTab === 'sales' && <><CustomersView /><div className="mt-8"><SalesView /></div></>}
               {activeTab === 'staff' && <StaffView />}
               {activeTab === 'actions' && <ActionListView />}

@@ -51,7 +51,7 @@ interface OpsTask {
 
 export default function OpsView() {
   return (
-    <div className="space-y-8 max-w-4xl">
+    <div className="space-y-8">
       <GoalsBlock />
       <TasksBlock section="PIPELINE" title="Pipeline" />
       <TasksBlock section="ACTION" title="Actionlista" />
