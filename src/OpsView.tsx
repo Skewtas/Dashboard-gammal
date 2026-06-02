@@ -492,31 +492,41 @@ function TaskRow({
   const [expanded, setExpanded] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [draftTitle, setDraftTitle] = useState(task.title);
+  const [editingOwner, setEditingOwner] = useState(false);
+  const [draftOwner, setDraftOwner] = useState(task.owner ?? '');
+  const [editingDeadline, setEditingDeadline] = useState(false);
+  const [draftDeadline, setDraftDeadline] = useState(task.deadline ? task.deadline.slice(0, 10) : '');
 
   const isDone = task.status === 'DONE' || task.status === 'CANCELLED';
 
-  const toggleDone = async () => {
-    await api(`/api/ops/tasks/${task.id}`, {
-      method: 'PUT',
-      body: JSON.stringify({ status: task.status === 'DONE' ? 'OPEN' : 'DONE' }),
-    });
+  const patch = async (data: Record<string, unknown>) => {
+    await api(`/api/ops/tasks/${task.id}`, { method: 'PUT', body: JSON.stringify(data) });
     onReload();
   };
 
-  const setStatus = async (status: Status) => {
-    await api(`/api/ops/tasks/${task.id}`, { method: 'PUT', body: JSON.stringify({ status }) });
-    onReload();
-  };
+  const toggleDone = () =>
+    patch({ status: task.status === 'DONE' ? 'OPEN' : 'DONE' });
 
-  const saveTitle = async () => {
+  const setStatus = (status: Status) => patch({ status });
+
+  const saveTitle = () => {
     if (draftTitle.trim() && draftTitle !== task.title) {
-      await api(`/api/ops/tasks/${task.id}`, {
-        method: 'PUT',
-        body: JSON.stringify({ title: draftTitle.trim() }),
-      });
+      patch({ title: draftTitle.trim() });
     }
     setEditingTitle(false);
-    onReload();
+  };
+
+  const saveOwner = () => {
+    const value = draftOwner.trim();
+    if (value !== (task.owner ?? '')) patch({ owner: value || null });
+    setEditingOwner(false);
+  };
+
+  const saveDeadline = () => {
+    const value = draftDeadline.trim() || null;
+    const current = task.deadline ? task.deadline.slice(0, 10) : null;
+    if (value !== current) patch({ deadline: value });
+    setEditingDeadline(false);
   };
 
   const remove = async () => {
@@ -580,16 +590,89 @@ function TaskRow({
           )}
         </div>
 
-        {showOwner && task.owner && (
-          <span className="text-xs text-gray-600 px-2 py-0.5 bg-gray-100 rounded">{task.owner}</span>
+        {/* Owner — always editable (also when grouped, so user can re-assign) */}
+        {editingOwner ? (
+          <input
+            autoFocus
+            value={draftOwner}
+            onChange={(e) => setDraftOwner(e.target.value)}
+            onBlur={saveOwner}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') saveOwner();
+              if (e.key === 'Escape') {
+                setDraftOwner(task.owner ?? '');
+                setEditingOwner(false);
+              }
+            }}
+            placeholder="Ansvarig"
+            className="w-24 text-xs bg-white border border-brand-accent rounded px-1.5 py-0.5 outline-none"
+          />
+        ) : task.owner ? (
+          <button
+            onClick={() => {
+              setDraftOwner(task.owner ?? '');
+              setEditingOwner(true);
+            }}
+            className="text-xs text-gray-600 px-2 py-0.5 bg-gray-100 rounded hover:bg-brand-accent/10 hover:text-brand-dark transition-colors"
+            title="Klicka för att ändra ansvarig"
+          >
+            {task.owner}
+          </button>
+        ) : (
+          <button
+            onClick={() => {
+              setDraftOwner('');
+              setEditingOwner(true);
+            }}
+            className="opacity-0 group-hover:opacity-100 text-[10px] text-gray-400 hover:text-brand-dark px-1.5"
+            title="Lägg till ansvarig"
+          >
+            + ansvarig
+          </button>
         )}
-        {task.deadline && (
-          <span className={`text-xs ${isOverdue(task.deadline, isDone) ? 'text-red-600' : 'text-gray-500'}`}>
+
+        {/* Deadline */}
+        {editingDeadline ? (
+          <input
+            autoFocus
+            type="date"
+            value={draftDeadline}
+            onChange={(e) => setDraftDeadline(e.target.value)}
+            onBlur={saveDeadline}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') saveDeadline();
+              if (e.key === 'Escape') {
+                setDraftDeadline(task.deadline ? task.deadline.slice(0, 10) : '');
+                setEditingDeadline(false);
+              }
+            }}
+            className="text-xs bg-white border border-brand-accent rounded px-1.5 py-0.5 outline-none"
+          />
+        ) : task.deadline ? (
+          <button
+            onClick={() => {
+              setDraftDeadline(task.deadline ? task.deadline.slice(0, 10) : '');
+              setEditingDeadline(true);
+            }}
+            className={`text-xs hover:text-brand-dark ${isOverdue(task.deadline, isDone) ? 'text-red-600' : 'text-gray-500'}`}
+            title="Klicka för att ändra deadline"
+          >
             {new Date(task.deadline).toLocaleDateString('sv-SE', {
               day: 'numeric',
               month: 'short',
             })}
-          </span>
+          </button>
+        ) : (
+          <button
+            onClick={() => {
+              setDraftDeadline('');
+              setEditingDeadline(true);
+            }}
+            className="opacity-0 group-hover:opacity-100 text-[10px] text-gray-400 hover:text-brand-dark px-1.5"
+            title="Lägg till deadline"
+          >
+            + deadline
+          </button>
         )}
         {task.status !== 'OPEN' && task.status !== 'DONE' && (
           <StatusBadge status={task.status} />
