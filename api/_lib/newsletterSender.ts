@@ -114,16 +114,14 @@ export async function deliverNewsletter(opts: SendNewsletterOpts): Promise<SendN
   const { newsletterId, recipients, subject, introText, imageData, embedUrl, htmlContent, appUrl } = opts;
   const fromAddress = process.env.SMTP_FROM || process.env.SMTP_USER || 'info@stodona.se';
 
+  // Bygg HTML-mall *en* gång — bara b64-emailen byter per mottagare.
   let sent = 0;
   const failedRecipients: string[] = [];
 
-  for (const email of recipients) {
-    const b64 = Buffer.from(email).toString('base64');
+  const renderHtml = (b64: string): string => {
     const trackingPixelUrl = `${appUrl}/api/newsletter/track/${newsletterId}/${b64}`;
-
     let html: string;
     if (htmlContent) {
-      // Rewrite outbound links to go through click-tracker
       const processed = htmlContent.replace(
         /<a([^>]+)href="([^"]+)"([^>]*)>/gi,
         (match: string, before: string, linkUrl: string, after: string) => {
@@ -144,18 +142,19 @@ export async function deliverNewsletter(opts: SendNewsletterOpts): Promise<SendN
         appUrl,
       });
     }
-
-    // Inline data:image/* via redirect to /api/newsletter/image/:id/:idx — keeps email size down
     let imageIndex = 0;
-    const finalHtml = html.replace(/src="(data:image\/[^;]+;base64,[^"]+)"/g, () => {
+    return html.replace(/src="(data:image\/[^;]+;base64,[^"]+)"/g, () => {
       const url = `${appUrl}/api/newsletter/image/${newsletterId}/${imageIndex++}`;
       return `src="${url}"`;
     });
+  };
 
+  const sendOne = async (email: string) => {
+    const b64 = Buffer.from(email).toString('base64');
+    const finalHtml = renderHtml(b64);
     if (!process.env.RESEND_API_KEY) {
-      // Dry-run
       sent++;
-      continue;
+      return;
     }
     try {
       const response = await fetch('https://api.resend.com/emails', {
@@ -180,6 +179,15 @@ export async function deliverNewsletter(opts: SendNewsletterOpts): Promise<SendN
       console.error(`Newsletter ${newsletterId} failed for ${email}:`, err.message);
       failedRecipients.push(email);
     }
+  };
+
+  // Skicka i parallella batchar om 10 mottagare — håller oss inom Resends
+  // rate-limit (~10/s) men gör 100-mottagar-utskick till en ~10 s-affär
+  // istället för 60+.
+  const CONCURRENCY = 10;
+  for (let i = 0; i < recipients.length; i += CONCURRENCY) {
+    const slice = recipients.slice(i, i + CONCURRENCY);
+    await Promise.all(slice.map(sendOne));
   }
 
   return { sent, failed: failedRecipients.length, failedRecipients };
