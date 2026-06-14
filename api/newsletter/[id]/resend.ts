@@ -1,79 +1,46 @@
+/**
+ * POST /api/newsletter/:id/resend — påminnelse till alla mottagare som
+ * INTE öppnat nyhetsbrevet. Skapar ett barn-Newsletter och enqueua hela
+ * mottagarlistan; cron processar resten i bakgrunden.
+ */
 import { prisma } from '../../_lib/prisma.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { deliverNewsletter } from '../../_lib/newsletterSender.js';
 
-const buildNewsletterHtml = (opts: {
-  introText: string;
-  imageData: string | null;
-  embedUrl: string | null;
-  trackingPixelUrl: string;
-  appUrl: string;
-}) => {
-  const { introText, imageData, embedUrl, trackingPixelUrl, appUrl } = opts;
-  const intro = introText ? `<p style="font-size:16px;line-height:1.6;color:#333;margin:0 0 24px;">${introText.replace(/\n/g, '<br/>')}</p>` : '';
-  let content = '';
-  if (imageData) {
-    content = `<img src="${imageData}" alt="Newsletter" style="width:100%;max-width:600px;height:auto;border-radius:12px;" />`;
-  } else if (embedUrl) {
-    content = `<a href="${embedUrl}" target="_blank" style="display:inline-block;padding:16px 32px;background:#1a1a2e;color:#fff;border-radius:10px;text-decoration:none;font-weight:bold;font-size:14px;">Visa nyhetsbrevet →</a>`;
-  }
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/></head>
-<body style="margin:0;padding:0;background:#f5f3ef;font-family:'Segoe UI',sans-serif;">
-<table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f3ef;padding:32px 0;">
-  <tr><td align="center">
-    <table width="600" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.06);">
-      <tr><td style="padding:40px 32px 0;">
-        <img src="${appUrl}/logotyp1.png" alt="Stodona" style="height:45px;width:auto;margin-bottom:24px;display:block;" />
-        ${intro}
-      </td></tr>
-      <tr><td style="padding:0 32px 32px;" align="center">
-        ${content}
-      </td></tr>
-      <tr><td style="padding:24px 32px;background:#faf8f5;border-top:1px solid #eae4d9;text-align:center;">
-        <p style="margin:0;font-size:12px;color:#999;">© ${new Date().getFullYear()} Stodona AB</p>
-        <p style="margin:4px 0 0;font-size:11px;color:#bbb;">Du får detta mail som kund hos Stodona.</p>
-      </td></tr>
-    </table>
-  </td></tr>
-</table>
-<img src="${trackingPixelUrl}" width="1" height="1" alt="" style="display:none;" />
-</body></html>`;
-};
+export const config = { maxDuration: 60 };
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const { id } = req.query;
-  const { newSubject } = req.body;
+  const { newSubject } = (req.body || {}) as { newSubject?: string };
+  if (typeof id !== 'string') return res.status(400).json({ error: 'Missing ID' });
 
-  if (typeof id !== 'string') {
-    return res.status(400).json({ error: 'Missing ID' });
+  const original = await prisma.newsletter.findUnique({ where: { id } });
+  if (!original) return res.status(404).json({ error: 'Newsletter not found.' });
+
+  const recipients = (original.recipients as string[]) || [];
+  const openedBy = (original.openedBy as string[]) || [];
+  const unopened = recipients.filter((r) => !openedBy.includes(r));
+
+  if (unopened.length === 0) {
+    return res.status(400).json({ error: 'Alla mottagare har redan öppnat nyhetsbrevet.' });
   }
 
-  const original = await prisma.newsletter.findUnique({
-    where: { id }
-  });
-
-  if (!original) {
-    return res.status(404).json({ error: "Newsletter not found in database." });
-  }
-
-  const recipients = original.recipients as string[] || [];
-  const openedBy = original.openedBy as string[] || [];
-  
-  const unopenedRecipients = recipients.filter(r => !openedBy.includes(r));
-  
-  if (unopenedRecipients.length === 0) {
-    return res.status(400).json({ error: "Alla mottagare har redan öppnat nyhetsbrevet." });
+  // Filtrera bort opt-outs
+  const optOutDoc = await prisma.automatedTemplate.findUnique({ where: { id: 'system_optouts' } });
+  const optOutEmails: string[] = (optOutDoc?.blocks as any)?.emails || [];
+  const optOutSet = new Set(optOutEmails);
+  const targets = unopened.filter((e) => !optOutSet.has(e));
+  if (targets.length === 0) {
+    return res.status(400).json({ error: 'Alla återstående mottagare har avregistrerat sig.' });
   }
 
   const subject = newSubject || `Påminnelse: ${original.subject}`;
   const baseUrl = process.env.APP_URL || `https://${req.headers.host}`;
-  const fromAddress = process.env.SMTP_FROM || process.env.SMTP_USER || 'info@stodona.se';
 
-  // Create new newsletter record for this resend
-  const newNewsletter = await prisma.newsletter.create({
+  // Skapa ny rad och pre-fyll kön
+  const child = await prisma.newsletter.create({
     data: {
       subject,
       category: original.category,
@@ -81,111 +48,57 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       imageData: original.imageData,
       embedUrl: original.embedUrl,
       htmlContent: original.htmlContent,
-      recipients: unopenedRecipients,
-      status: 'sending'
-    }
+      recipients: targets as any,
+      pendingRecipients: targets as any,
+      status: 'sending',
+      parentNewsletterId: original.id,
+    },
   });
 
-  let successCount = 0;
-  const failedRecipients: string[] = [];
+  // Försök max 45 s synkront, resten via cron
+  const result = await deliverNewsletter({
+    newsletterId: child.id,
+    recipients: targets,
+    subject,
+    introText: original.introText,
+    imageData: original.imageData,
+    embedUrl: original.embedUrl,
+    htmlContent: original.htmlContent,
+    appUrl: baseUrl,
+    budgetMs: 45_000,
+  });
 
-  for (const email of unopenedRecipients) {
-    const b64 = Buffer.from(email).toString('base64');
-    const trackingPixelUrl = `${baseUrl}/api/newsletter/track/${newNewsletter.id}/${b64}`;
-
-    let html: string;
-    if (original.htmlContent) {
-      let processedContent = original.htmlContent;
-      // Re-wrap links with the new ID
-      processedContent = processedContent.replace(/<a([^>]+)href="([^"]+)"([^>]*)>/gi, (match: string, before: string, linkUrl: string, after: string) => {
-        if (linkUrl.startsWith('mailto:') || linkUrl.startsWith('tel:')) return match;
-        // The original HTML might already have tracking links. We should ideally extract the raw URL.
-        // But for simplicity, we assume we either send raw or if it's already a tracking link, it might get double wrapped?
-        // Wait, original.htmlContent is SAVED clean in send.ts! Yes! `send.ts` saves `req.body.htmlContent` cleanly before modification.
-        const encodedLink = encodeURIComponent(linkUrl);
-        const trackingClickUrl = `${baseUrl}/api/newsletter/click/${newNewsletter.id}/${b64}?url=${encodedLink}`;
-        return `<a${before}href="${trackingClickUrl}"${after}>`;
-      });
-
-      html = `<!DOCTYPE html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/>
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Outfit:wght@300;400;500;600&display=swap');
-body, p, a, span, td { font-family: 'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif !important; }
-h1, h2, h3, h4, h5, h6 { font-family: 'Outfit', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif !important; }
-</style></head>
-<body style="margin:0;padding:0;background:#f5f3ef;font-family:'Inter', 'Segoe UI', sans-serif;">
-<table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f3ef;padding:32px 0;">
-  <tr><td align="center">
-    <table width="600" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.06);">
-      <tr><td style="padding:40px 32px 0;">
-        <img src="${baseUrl}/logotyp1.png" alt="Stodona" style="height:45px;width:auto;margin-bottom:24px;display:block;" />
-      </td></tr>
-      <tr><td style="padding:0; padding-bottom:32px;">${processedContent}</td></tr>
-      <tr><td style="padding:24px 32px;background:#faf8f5;border-top:1px solid #eae4d9;text-align:center;">
-        <p style="margin:0;font-size:12px;color:#999;">© ${new Date().getFullYear()} Stodona AB</p>
-        <p style="margin:4px 0 0;font-size:11px;color:#bbb;">Du får detta mail som kund hos Stodona.</p>
-      </td></tr>
-    </table>
-  </td></tr>
-</table>
-<img src="${trackingPixelUrl}" width="1" height="1" alt="" style="display:none;" />
-</body></html>`;
-    } else {
-      html = buildNewsletterHtml({ 
-        introText: original.introText || '', 
-        imageData: original.imageData, 
-        embedUrl: original.embedUrl, 
-        trackingPixelUrl,
-        appUrl: baseUrl
-      });
-    }
-
-    let imageIndex = 0;
-    const finalHtml = html.replace(/src="(data:image\/[^;]+;base64,[^"]+)"/g, () => {
-      const url = `${baseUrl}/api/newsletter/image/${newNewsletter.id}/${imageIndex++}`;
-      return `src="${url}"`;
-    });
-
-    if (process.env.RESEND_API_KEY) {
-      try {
-        const response = await fetch('https://api.resend.com/emails', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            from: `"Stodona" <${fromAddress}>`,
-            to: email,
-            subject: subject,
-            html: finalHtml
-          })
-        });
-
-        if (!response.ok) {
-           const errData = await response.json().catch(()=>({}));
-           throw new Error(errData.message || response.statusText);
-        }
-
-        successCount++;
-      } catch (err: any) {
-        failedRecipients.push(email);
-      }
-    } else {
-      successCount++;
-    }
-  }
-
-  const finalStatus = failedRecipients.length === 0 ? 'sent' : (successCount > 0 ? 'partial' : 'failed');
+  const isQueued = result.remainingRecipients.length > 0;
+  const finalStatus = isQueued
+    ? 'queued'
+    : result.failed === 0
+      ? 'sent'
+      : result.sent > 0
+        ? 'partial'
+        : 'failed';
 
   await prisma.newsletter.update({
-    where: { id: newNewsletter.id },
+    where: { id: child.id },
     data: {
       status: finalStatus,
-      successCount,
-      failedCount: failedRecipients.length
-    }
+      successCount: result.sent,
+      failedCount: result.failed,
+      failedRecipients: result.failedRecipients as any,
+      pendingRecipients: result.remainingRecipients as any,
+      sentAt: new Date(),
+    },
   });
 
-  res.json({ success: true, message: `Påminnelse skickad till ${successCount}/${unopenedRecipients.length} mottagare via databasen.` });
+  res.json({
+    success: true,
+    childNewsletterId: child.id,
+    queued: isQueued,
+    sent: result.sent,
+    pending: result.remainingRecipients.length,
+    failed: result.failed,
+    targets: targets.length,
+    message: isQueued
+      ? `Skickade ${result.sent} direkt, ${result.remainingRecipients.length} ligger i kö (bakgrund).`
+      : `Skickat till ${result.sent}/${targets.length} mottagare.`,
+  });
 }
