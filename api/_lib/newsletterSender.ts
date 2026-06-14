@@ -114,7 +114,6 @@ export async function deliverNewsletter(opts: SendNewsletterOpts): Promise<SendN
   const { newsletterId, recipients, subject, introText, imageData, embedUrl, htmlContent, appUrl } = opts;
   const fromAddress = process.env.SMTP_FROM || process.env.SMTP_USER || 'info@stodona.se';
 
-  // Bygg HTML-mall *en* gång — bara b64-emailen byter per mottagare.
   let sent = 0;
   const failedRecipients: string[] = [];
 
@@ -149,45 +148,72 @@ export async function deliverNewsletter(opts: SendNewsletterOpts): Promise<SendN
     });
   };
 
-  const sendOne = async (email: string) => {
-    const b64 = Buffer.from(email).toString('base64');
-    const finalHtml = renderHtml(b64);
-    if (!process.env.RESEND_API_KEY) {
-      sent++;
-      return;
-    }
+  if (!process.env.RESEND_API_KEY) {
+    // Dry-run
+    return { sent: recipients.length, failed: 0, failedRecipients: [] };
+  }
+
+  // Resends batch-endpoint (POST /emails/batch) tar upp till 100 mejl per
+  // anrop. Det gör ett 2000-mottagar-utskick till ~20 HTTP-anrop istället
+  // för 2000 — fits comfortably i Vercels 60 s-fönster.
+  const CHUNK = 100;
+  const PARALLEL = 4;
+
+  const buildBatch = (slice: string[]) =>
+    slice.map((email) => {
+      const b64 = Buffer.from(email).toString('base64');
+      return {
+        from: `"Stodona" <${fromAddress}>`,
+        to: email,
+        subject,
+        html: renderHtml(b64),
+      };
+    });
+
+  const sendBatch = async (slice: string[]) => {
+    const body = buildBatch(slice);
     try {
-      const response = await fetch('https://api.resend.com/emails', {
+      const r = await fetch('https://api.resend.com/emails/batch', {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          from: `"Stodona" <${fromAddress}>`,
-          to: email,
-          subject,
-          html: finalHtml,
-        }),
+        body: JSON.stringify(body),
       });
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.message || response.statusText);
+      if (r.status === 429) {
+        // Backoff och försök igen en gång
+        await new Promise((res) => setTimeout(res, 1500));
+        const retry = await fetch('https://api.resend.com/emails/batch', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body),
+        });
+        if (!retry.ok) throw new Error(`429 + retry ${retry.status}`);
+      } else if (!r.ok) {
+        const errData = await r.json().catch(() => ({}));
+        throw new Error((errData as any).message || `${r.status} ${r.statusText}`);
       }
-      sent++;
+      sent += slice.length;
     } catch (err: any) {
-      console.error(`Newsletter ${newsletterId} failed for ${email}:`, err.message);
-      failedRecipients.push(email);
+      console.error(
+        `Newsletter ${newsletterId} batch failed (${slice.length} recipients):`,
+        err.message
+      );
+      failedRecipients.push(...slice);
     }
   };
 
-  // Skicka i parallella batchar om 10 mottagare — håller oss inom Resends
-  // rate-limit (~10/s) men gör 100-mottagar-utskick till en ~10 s-affär
-  // istället för 60+.
-  const CONCURRENCY = 10;
-  for (let i = 0; i < recipients.length; i += CONCURRENCY) {
-    const slice = recipients.slice(i, i + CONCURRENCY);
-    await Promise.all(slice.map(sendOne));
+  // Bygg listor av 100-mottagar-chunks och kör 4 batchar samtidigt
+  const chunks: string[][] = [];
+  for (let i = 0; i < recipients.length; i += CHUNK) {
+    chunks.push(recipients.slice(i, i + CHUNK));
+  }
+  for (let i = 0; i < chunks.length; i += PARALLEL) {
+    await Promise.all(chunks.slice(i, i + PARALLEL).map(sendBatch));
   }
 
   return { sent, failed: failedRecipients.length, failedRecipients };
