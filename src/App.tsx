@@ -1524,18 +1524,16 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('overview');
 
   const tabs = [
+    { id: 'overview', label: 'ÖVERSIKT', icon: LayoutDashboard },
     { id: 'schedule2', label: 'SCHEMA', icon: CalendarDays },
     { id: 'clients', label: 'KUNDER', icon: Users },
     { id: 'ops', label: 'VECKOUPPFÖLJNING', icon: Target },
-    { id: 'import', label: 'IMPORTERA FRÅN TIMEWAVE', icon: RefreshCw },
-    { id: 'overview', label: 'ÖVERSIKT', icon: LayoutDashboard },
     { id: 'sales', label: 'FÖRSÄLJNING', icon: TrendingUp },
     { id: 'staff', label: 'PERSONAL', icon: Briefcase },
-    { id: 'actions', label: 'ACTIONLISTA', icon: AlertTriangle },
-    { id: 'tickets', label: 'ÄRENDEHANTERING', icon: ClipboardList },
-    { id: 'mail', label: 'MAIL', icon: Mail },
     { id: 'newsletter', label: 'NYHETSBREV', icon: Newspaper },
     { id: 'automations', label: 'AUTOMATIONER', icon: Zap },
+    { id: 'import', label: 'IMPORTERA FRÅN TIMEWAVE', icon: RefreshCw },
+    // Pensionerade flikar — ACTIONLISTA / ÄRENDEHANTERING / MAIL döljs men koden ligger kvar.
   ];
 
   return (
