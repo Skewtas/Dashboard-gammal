@@ -1,19 +1,20 @@
 /**
- * "Hur länge stannar våra kunder?" — beräknar kundlojalitet på fakturahistorik.
+ * "Hur länge stannar våra kunder?" — fakturabaserad kundlojalitet.
  *
- * Fakturor är ett bättre underlag än workorders/missions eftersom workorders
- * stängs och återskapas — då ser det ut som om kunden är "ny" trots flera
- * års relation. En faktura speglar däremot en faktisk affärsrelation.
+ * Snabb endpoint: läser cachad snapshot från DashboardSnapshot-tabellen.
+ * Returnerar omedelbart (vanligtvis <300 ms). Är snapshoten äldre än 24 h
+ * triggas en bakgrundsuppdatering — användaren får ändå svaret direkt.
  *
- * Hämtar fakturor från Timewave bakifrån (senaste → äldsta), grupperar per
- * client_id, plockar MIN(invoice_date) = kund-sedan och MAX = senast-fakturerad.
- * "Aktiv kund" = fakturerad inom de senaste 90 dagarna. Snitt + median +
- * fördelning över fem buckets returneras.
- *
- * Resultatet cachas i minnet 1 h per lambda-instans.
+ * Manuell uppdatering: POST /api/dashboard/customer-tenure (eller GET med
+ * ?refresh=1) tvingar en synkron refresh och returnerar färska siffror.
  */
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { prisma } from '../_lib/prisma.js';
 import { getTimewaveToken, forceRefreshTimewaveToken } from '../_lib/timewaveAuth.js';
+
+const KEY = 'customer_tenure';
+const STALE_HOURS = 24;
+const DEFAULT_WINDOW_MONTHS = 36;
 
 interface TenureResult {
   computedAt: string;
@@ -33,22 +34,57 @@ interface TenureResult {
   invoicesScanned: number;
 }
 
-let cache: { at: number; data: TenureResult } | null = null;
-const CACHE_TTL_MS = 60 * 60 * 1000; // 1 timme
-
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const force = req.query.refresh === '1' || req.query.refresh === 'true';
-  if (!force && cache && Date.now() - cache.at < CACHE_TTL_MS) {
-    return res.json({ ...cache.data, cached: true });
+  const force = req.query.refresh === '1' || req.query.refresh === 'true' || req.method === 'POST';
+
+  if (force) {
+    try {
+      const data = await refreshAndStore();
+      return res.json({ ...data, cached: false, stale: false });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || 'refresh failed' });
+    }
   }
 
-  const windowMonths = Math.min(120, Math.max(12, Number(req.query.months) || 60));
+  const snapshot = await prisma.dashboardSnapshot.findUnique({ where: { key: KEY } });
+  if (!snapshot) {
+    // Inget cachat — gör en synkron beräkning första gången
+    try {
+      const data = await refreshAndStore();
+      return res.json({ ...data, cached: false, stale: false });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || 'first compute failed' });
+    }
+  }
+
+  const ageMs = Date.now() - snapshot.computedAt.getTime();
+  const stale = ageMs > STALE_HOURS * 3600 * 1000;
+  const data = snapshot.data as unknown as TenureResult;
+
+  // Färska data finns — returnera dem direkt
+  res.json({ ...data, cached: true, stale, ageHours: Math.round(ageMs / 3600000) });
+}
+
+async function refreshAndStore(): Promise<TenureResult> {
+  await prisma.dashboardSnapshot.upsert({
+    where: { key: KEY },
+    create: { key: KEY, data: {} as any, refreshing: true },
+    update: { refreshing: true },
+  });
   try {
-    const data = await computeTenureFromInvoices(windowMonths);
-    cache = { at: Date.now(), data };
-    res.json({ ...data, cached: false });
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message || 'Failed to compute tenure' });
+    const data = await computeTenureFromInvoices(DEFAULT_WINDOW_MONTHS);
+    await prisma.dashboardSnapshot.upsert({
+      where: { key: KEY },
+      create: { key: KEY, data: data as any, refreshing: false, computedAt: new Date() },
+      update: { data: data as any, refreshing: false, computedAt: new Date() },
+    });
+    return data;
+  } catch (err) {
+    await prisma.dashboardSnapshot.update({
+      where: { key: KEY },
+      data: { refreshing: false },
+    }).catch(() => {});
+    throw err;
   }
 }
 
@@ -60,59 +96,55 @@ async function computeTenureFromInvoices(windowMonths: number): Promise<TenureRe
   let token = await getTimewaveToken();
   const baseUrl = 'https://api.timewave.se/v3';
 
-  const fetchPage = async (page: number): Promise<{ data: any[]; last_page: number }> => {
-    let res = await fetch(`${baseUrl}/invoices?page[number]=${page}&page[size]=200`, {
+  const fetchPage = async (page: number, retry = true): Promise<{ data: any[]; last_page: number }> => {
+    let res = await fetch(`${baseUrl}/invoices?page[number]=${page}&page[size]=300`, {
       headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
     });
-    if (res.status === 403) {
+    if (res.status === 403 && retry) {
       token = await forceRefreshTimewaveToken();
-      res = await fetch(`${baseUrl}/invoices?page[number]=${page}&page[size]=200`, {
-        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
-      });
+      return fetchPage(page, false);
     }
     if (!res.ok) return { data: [], last_page: 1 };
     return res.json() as Promise<{ data: any[]; last_page: number }>;
   };
 
-  // Första sidan ger oss last_page (där nyaste fakturorna ligger)
   const first = await fetchPage(1);
   const lastPage = first.last_page || 1;
 
-  // Vi går bakåt från sista sidan (nyaste) tills vi når cutoff
+  // Walk newest → oldest, 16 pages parallellt per omgång
   const byClient = new Map<number, { first: string; last: string; count: number }>();
   let invoicesScanned = 0;
-  let stopScanning = false;
-  // Bryt i parallella 4-page-batches för fart
-  for (let page = lastPage; page > 0 && !stopScanning; page -= 4) {
+  let stop = false;
+  const BATCH = 16;
+  for (let page = lastPage; page > 0 && !stop; page -= BATCH) {
     const pages: number[] = [];
-    for (let i = 0; i < 4 && page - i > 0; i++) pages.push(page - i);
-    const results = await Promise.all(pages.map((p) => fetchPage(p).catch(() => ({ data: [], last_page: 1 }))));
+    for (let i = 0; i < BATCH && page - i > 0; i++) pages.push(page - i);
+    const results = await Promise.all(
+      pages.map((p) => fetchPage(p).catch(() => ({ data: [], last_page: 1 })))
+    );
     for (const r of results) {
       const invoices = r.data || [];
-      let pageAllBeforeCutoff = invoices.length > 0;
+      let allBeforeCutoff = invoices.length > 0;
       for (const inv of invoices) {
         invoicesScanned++;
         if (inv.deleted || inv.credited) continue;
         const cid = inv.client_id ?? inv.client?.id;
         const date: string | undefined = inv.invoice_date;
         if (!cid || !date) continue;
-        if (date >= cutoffStr) pageAllBeforeCutoff = false;
+        if (date >= cutoffStr) allBeforeCutoff = false;
         if (date < cutoffStr) continue;
-        const existing = byClient.get(cid);
-        if (!existing) {
-          byClient.set(cid, { first: date, last: date, count: 1 });
-        } else {
-          if (date < existing.first) existing.first = date;
-          if (date > existing.last) existing.last = date;
-          existing.count++;
+        const ex = byClient.get(cid);
+        if (!ex) byClient.set(cid, { first: date, last: date, count: 1 });
+        else {
+          if (date < ex.first) ex.first = date;
+          if (date > ex.last) ex.last = date;
+          ex.count++;
         }
       }
-      // Om en hel sida ligger före cutoff är vi färdiga
-      if (pageAllBeforeCutoff) stopScanning = true;
+      if (allBeforeCutoff) stop = true;
     }
   }
 
-  // "Aktiv kund" = fakturerad inom de senaste 90 dagarna
   const activeCutoff = new Date(today.getTime() - 90 * 24 * 3600 * 1000);
   const activeCutoffStr = formatDate(activeCutoff);
 
@@ -120,8 +152,7 @@ async function computeTenureFromInvoices(windowMonths: number): Promise<TenureRe
   let oldestMonths = 0;
   for (const [, info] of byClient) {
     if (info.last < activeCutoffStr) continue;
-    const firstDate = new Date(info.first);
-    const months = monthsBetween(firstDate, today);
+    const months = monthsBetween(new Date(info.first), today);
     tenures.push(months);
     if (months > oldestMonths) oldestMonths = months;
   }

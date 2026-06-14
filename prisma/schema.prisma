@@ -857,3 +857,14 @@ model OpsTask {
   @@index([owner])
   @@map("ops_tasks")
 }
+
+// Cached dashboard snapshots (so the heavy Timewave aggregations don't run
+// every time someone opens ÖVERSIKT). Singleton-per-key row.
+model DashboardSnapshot {
+  key         String   @id
+  computedAt  DateTime @default(now()) @map("computed_at")
+  data        Json
+  refreshing  Boolean  @default(false)
+
+  @@map("dashboard_snapshots")
+}

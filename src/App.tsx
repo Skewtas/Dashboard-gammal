@@ -335,16 +335,32 @@ const OverviewView = () => {
     oldestKnownMonths: number;
     windowMonths: number;
     cached?: boolean;
+    stale?: boolean;
+    ageHours?: number;
+    computedAt?: string;
   };
   const [tenure, setTenure] = React.useState<TenureData | null>(null);
   const [tenureLoading, setTenureLoading] = React.useState(true);
-  React.useEffect(() => {
-    fetch('/api/dashboard/customer-tenure')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => setTenure(d))
-      .catch(() => setTenure(null))
-      .finally(() => setTenureLoading(false));
+  const [tenureRefreshing, setTenureRefreshing] = React.useState(false);
+
+  const loadTenure = React.useCallback(async (refresh = false) => {
+    if (refresh) setTenureRefreshing(true);
+    else setTenureLoading(true);
+    try {
+      const url = refresh ? '/api/dashboard/customer-tenure?refresh=1' : '/api/dashboard/customer-tenure';
+      const r = await fetch(url);
+      if (r.ok) setTenure(await r.json());
+    } catch {
+      // ignore
+    } finally {
+      setTenureLoading(false);
+      setTenureRefreshing(false);
+    }
   }, []);
+
+  React.useEffect(() => {
+    loadTenure(false);
+  }, [loadTenure]);
 
   React.useEffect(() => {
     const fetchStats = async () => {
@@ -594,10 +610,23 @@ const OverviewView = () => {
                   </div>
                 );
               })}
-              <p className="text-[10px] text-brand-muted mt-3">
-                Baserat på fakturahistorik från Timewave ({tenure.windowMonths} mån bakåt). Kunder som funnits längre
-                räknas in i "2+ år" — verkligt snitt kan därför vara högre. {tenure.cached ? '· Cachad 1 h' : '· Just beräknad'}
-              </p>
+              <div className="flex items-center justify-between mt-3 gap-3">
+                <p className="text-[10px] text-brand-muted">
+                  Baserat på fakturahistorik ({tenure.windowMonths} mån bakåt). Kunder som funnits längre räknas in
+                  i "2+ år".
+                  {tenure.ageHours != null
+                    ? ` Senast uppdaterad ${tenure.ageHours === 0 ? 'nyss' : `för ${tenure.ageHours} h sedan`}.`
+                    : ''}
+                </p>
+                <button
+                  onClick={() => loadTenure(true)}
+                  disabled={tenureRefreshing}
+                  className="text-[11px] text-brand-accent hover:underline flex items-center gap-1 whitespace-nowrap disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3 h-3 ${tenureRefreshing ? 'animate-spin' : ''}`} />
+                  {tenureRefreshing ? 'Uppdaterar…' : 'Uppdatera nu'}
+                </button>
+              </div>
             </div>
           )}
         </CardContent>
