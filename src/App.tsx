@@ -37,7 +37,8 @@ import {
   Building2,
   BrainCircuit,
   CalendarSearch,
-  Target
+  Target,
+  ListChecks
 } from 'lucide-react';
 import {
   BarChart,
@@ -281,6 +282,7 @@ const OverviewView = () => {
     issues: number;
     onlineBookings: number;
     teamBreakdown: { name: string; hours: number; revenue: number }[];
+    topClients: { name: string; revenue: number }[];
     salesData: typeof salesData;
     isLoading: boolean;
   }>({
@@ -301,6 +303,7 @@ const OverviewView = () => {
     issues: 0,
     onlineBookings: 0,
     teamBreakdown: [],
+    topClients: [],
     salesData: salesData,
     isLoading: true
   });
@@ -471,6 +474,7 @@ const OverviewView = () => {
           issues: issuesRes?.total || issuesRes?.data?.length || 0,
           onlineBookings: missionsSummary.onlineBookings || 0,
           teamBreakdown: missionsSummary.teamBreakdown || [],
+          topClients: missionsSummary.topClients || [],
           salesData: updatedSalesData,
           isLoading: false,
         });
@@ -642,6 +646,42 @@ const OverviewView = () => {
                   <td className="py-2.5 text-right text-brand-dark">{fmt(Math.round(stats.teamBreakdown.reduce((s, t) => s + t.hours, 0)))} h</td>
                   <td className="py-2.5 text-right text-brand-dark">{fmt(Math.round(stats.teamBreakdown.reduce((s, t) => s + t.revenue, 0)))} kr</td>
                 </tr>
+              </tbody>
+            </table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Top 10 kunder */}
+      <Card>
+        <CardContent className="p-5">
+          <h4 className="text-sm font-semibold text-brand-dark mb-4 flex items-center gap-2">
+            <Star className="w-4 h-4 text-brand-accent" />
+            Topp 10 kunder — {currentMonthName} {new Date().getFullYear()}
+          </h4>
+          {stats.isLoading ? (
+            <RefreshCw className="w-5 h-5 animate-spin text-gray-400 mx-auto my-4" />
+          ) : stats.topClients.length === 0 ? (
+            <p className="text-xs text-brand-muted italic">Ingen fakturadata för månaden ännu.</p>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-[10px] text-brand-muted uppercase tracking-wider border-b border-gray-200">
+                  <th className="text-left pb-2 pl-2">#</th>
+                  <th className="text-left pb-2">Kund</th>
+                  <th className="text-right pb-2 pr-2">Intäkter (ex. moms)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {stats.topClients.slice(0, 10).map((c, i) => (
+                  <tr key={i} className="border-t border-gray-100 hover:bg-gray-50/50">
+                    <td className="py-2.5 pl-2 text-brand-muted font-mono text-xs">{i + 1}</td>
+                    <td className="py-2.5 font-medium text-brand-dark">{c.name}</td>
+                    <td className="py-2.5 pr-2 text-right font-medium text-brand-dark tabular-nums">
+                      {fmt(Math.round(c.revenue))} kr
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           )}
@@ -1827,8 +1867,7 @@ export default function App() {
   const tabs = [
     { id: 'overview', label: 'ÖVERSIKT', icon: LayoutDashboard },
     { id: 'schedule2', label: 'SCHEMA', icon: CalendarDays },
-    { id: 'ops', label: 'VECKOUPPFÖLJNING', icon: Target },
-    { id: 'sales', label: 'FÖRSÄLJNING', icon: TrendingUp },
+    { id: 'ops', label: 'VECKOUPPFÖLJNING', icon: ListChecks },
     { id: 'email', label: 'E-POST UTSKICK', icon: Mail },
     { id: 'import', label: 'IMPORTERA FRÅN TIMEWAVE', icon: RefreshCw },
     // Dolda flikar — KUNDER / PERSONAL / ACTIONLISTA / ÄRENDEHANTERING / MAIL.
@@ -1906,7 +1945,6 @@ export default function App() {
                   </aside>
                 </div>
               )}
-              {activeTab === 'sales' && <><CustomersView /><div className="mt-8"><SalesView /></div></>}
               {activeTab === 'staff' && <StaffView />}
               {activeTab === 'actions' && <ActionListView />}
               {activeTab === 'tickets' && <TicketsView />}
