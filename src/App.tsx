@@ -54,6 +54,7 @@ import { timewaveService } from './services/timewaveService';
 import DispatchBoard from './DispatchBoard';
 import NewsletterView from './NewsletterView';
 import AutomationsView from './AutomationsView';
+import EmailDispatchView from './EmailDispatchView';
 // MasterScheduleView (gamla SCHEMA & LUCKOR) pensionerad — använd ScheduleView (HeadOf 2.0) istället.
 import ClientsView from './ClientsView';
 import HeadOfScheduleView from './ScheduleView';
@@ -1740,8 +1741,7 @@ export default function App() {
     { id: 'schedule2', label: 'SCHEMA', icon: CalendarDays },
     { id: 'ops', label: 'VECKOUPPFÖLJNING', icon: Target },
     { id: 'sales', label: 'FÖRSÄLJNING', icon: TrendingUp },
-    { id: 'newsletter', label: 'NYHETSBREV', icon: Newspaper },
-    { id: 'automations', label: 'AUTOMATIONER', icon: Zap },
+    { id: 'email', label: 'E-POST UTSKICK', icon: Mail },
     { id: 'import', label: 'IMPORTERA FRÅN TIMEWAVE', icon: RefreshCw },
     // Dolda flikar — KUNDER / PERSONAL / ACTIONLISTA / ÄRENDEHANTERING / MAIL.
     // Komponenterna ligger kvar i koden och kan visas igen med en rad här.
@@ -1823,8 +1823,7 @@ export default function App() {
               {activeTab === 'actions' && <ActionListView />}
               {activeTab === 'tickets' && <TicketsView />}
               {activeTab === 'mail' && <MailView />}
-              {activeTab === 'newsletter' && <NewsletterView />}
-              {activeTab === 'automations' && <AutomationsView />}
+              {activeTab === 'email' && <EmailDispatchView />}
               {activeTab === 'schedule2' && <div className="h-[calc(100vh-140px)] -mx-8 -my-8"><HeadOfScheduleView /></div>}
               {activeTab === 'clients' && <ClientsView />}
               {activeTab === 'ops' && <OpsView />}
