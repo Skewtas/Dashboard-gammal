@@ -56,9 +56,10 @@ import DispatchBoard from './DispatchBoard';
 import NewsletterView from './NewsletterView';
 import AutomationsView from './AutomationsView';
 import EmailDispatchView from './EmailDispatchView';
-// MasterScheduleView (gamla SCHEMA & LUCKOR) pensionerad — använd ScheduleView (HeadOf 2.0) istället.
+// SCHEMA läser direkt från Timewave (HeadOf 2.0:s egna mission-tabell är tom
+// — vi använder fortfarande Timewave som källa för bokningar/skift).
 import ClientsView from './ClientsView';
-import HeadOfScheduleView from './ScheduleView';
+import TimewaveScheduleGrid from './TimewaveScheduleGrid';
 import ImportView from './ImportView';
 import OpsView from './OpsView';
 
@@ -1950,7 +1951,7 @@ export default function App() {
               {activeTab === 'tickets' && <TicketsView />}
               {activeTab === 'mail' && <MailView />}
               {activeTab === 'email' && <EmailDispatchView />}
-              {activeTab === 'schedule2' && <div className="h-[calc(100vh-140px)] -mx-8 -my-8"><HeadOfScheduleView /></div>}
+              {activeTab === 'schedule2' && <div className="h-[calc(100vh-140px)] -mx-8 -my-8"><TimewaveScheduleGrid /></div>}
               {activeTab === 'clients' && <ClientsView />}
               {activeTab === 'ops' && <OpsView />}
               {activeTab === 'import' && <ImportView />}
