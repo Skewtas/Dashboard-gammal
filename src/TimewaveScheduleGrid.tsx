@@ -3,10 +3,25 @@ import { Calendar as CalendarIcon, Clock, User, ChevronLeft, ChevronRight, GripH
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import axios from 'axios';
+import {
+  DndContext,
+  DragEndEvent,
+  DragOverlay,
+  DragStartEvent,
+  PointerSensor,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
+
+// Drag-and-drop: en bookingline-flytt skickas direkt till Timewave.
+// Avsiktlig avgränsning — endast SHIFT-läge (denna förekomst), inte serien.
+// Vill användaren ändra serien → använd modalen.
 
 const WEEKDAYS = ["Sön", "Mån", "Tis", "Ons", "Tor", "Fre", "Lör"];
 
@@ -21,6 +36,12 @@ export default function TimewaveScheduleGrid() {
   const [loading, setLoading] = useState(false);
   
   const [editingMission, setEditingMission] = useState<any>(null);
+
+  // Drag-and-drop state. `dragging` = block-objektet som lyfts; `pendingMove`
+  // = pågående PUT till Timewave (visa en toast, blockera nya drag).
+  const [dragging, setDragging] = useState<any>(null);
+  const [pendingMove, setPendingMove] = useState<string | null>(null);
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
   // Generate Date Range based on viewMode and currentDate
   const datesInView = useMemo(() => {
@@ -188,6 +209,90 @@ export default function TimewaveScheduleGrid() {
      });
   }, [employees, searchQuery]);
 
+  // Flytta ett pass live → PUT mot Timewave bookingline. Frågar inte
+  // SHIFT/SERIE — drag-och-släpp tolkas alltid som "bara denna gång".
+  const moveBookingline = async (block: any, newEmployeeId: string, newDate: string) => {
+    if (!block.shiftId) {
+      alert('Det här passet saknar bookingline-id i Timewave och kan därför inte flyttas via drag-och-släpp. Klicka på passet för att redigera.');
+      return;
+    }
+    const sameCell = String(block.employeeId) === String(newEmployeeId) && block.date === newDate;
+    if (sameCell) return;
+
+    setPendingMove(`${block.shiftId}`);
+    // Optimistisk uppdatering: skriv om missions-state lokalt så cellen
+    // hoppar omedelbart, även innan Timewave svarar.
+    const prevMissions = missions;
+    setMissions((curr) =>
+      curr.map((m: any) => {
+        if (m.id !== block.missionId) return m;
+        const next = { ...m, employees: [...(m.employees || [])] };
+        next.employees = next.employees.map((e: any) => {
+          const shiftKey = e.bookingline_id ?? e.id;
+          if (String(shiftKey) !== String(block.shiftId)) return e;
+          return {
+            ...e,
+            startdate: newDate,
+            employee_id: newEmployeeId === 'UNASSIGNED' ? null : Number(newEmployeeId),
+          };
+        });
+        return next;
+      })
+    );
+
+    const payload: any = {
+      data: {
+        type: 'bookinglines',
+        id: block.shiftId,
+        attributes: {
+          startdate: newDate,
+          enddate: newDate,
+          starttime: (block.startTimeRaw || '08:00').substring(0, 5) + ':00',
+          endtime: (block.endTimeRaw || '10:00').substring(0, 5) + ':00',
+        },
+      },
+    };
+    if (newEmployeeId && newEmployeeId !== 'UNASSIGNED') {
+      payload.data.relationships = {
+        employee: { data: { type: 'employees', id: newEmployeeId } },
+      };
+    }
+
+    try {
+      await axios.put(`/api/timewave/missions/bookinglines/${block.shiftId}`, payload);
+      // Synka mot Timewave-statusen så vi inte cementerar fel optimistisk gissning
+      await fetchSchedule();
+    } catch (err: any) {
+      console.error('[DnD] PUT failed', err?.response?.data || err.message);
+      // Rulla tillbaka
+      setMissions(prevMissions);
+      alert(
+        'Kunde inte flytta passet i Timewave: ' +
+          (err?.response?.data?.message ||
+            JSON.stringify(err?.response?.data?.errors) ||
+            err.message)
+      );
+    } finally {
+      setPendingMove(null);
+    }
+  };
+
+  const onDragStart = (e: DragStartEvent) => {
+    const data = (e.active.data.current as any)?.block;
+    if (data) setDragging(data);
+  };
+
+  const onDragEnd = async (e: DragEndEvent) => {
+    const block = (e.active.data.current as any)?.block;
+    setDragging(null);
+    if (!block || !e.over) return;
+    const dropId = String(e.over.id);
+    const m = dropId.match(/^cell:([^:]+):(\d{4}-\d{2}-\d{2})$/);
+    if (!m) return;
+    const [, newEmployeeId, newDate] = m;
+    await moveBookingline(block, newEmployeeId, newDate);
+  };
+
   const handleSaveEdit = async (mode: 'SHIFT' | 'SERIES') => {
      if (!editingMission) return;
      try {
@@ -263,8 +368,9 @@ export default function TimewaveScheduleGrid() {
   };
 
   return (
+    <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
     <div className="flex flex-col h-full bg-white overflow-hidden font-sans">
-      
+
       {/* Header */}
       <div className="px-6 py-4 border-b border-gray-100 bg-gray-50 flex flex-wrap items-center justify-between gap-4">
          <div className="flex items-center gap-4">
@@ -397,44 +503,53 @@ export default function TimewaveScheduleGrid() {
                               const isWeekend = d.getDay() === 0 || d.getDay() === 6;
                               const isCollapsed = isWeekend;
 
+                              const dragDisabled = !!pendingMove;
                               return (
-                                 <div 
-                                    key={dateStr} 
+                                 <DroppableCell
+                                    key={dateStr}
+                                    employeeId={emp.id}
+                                    dateStr={dateStr}
                                     className={cn(
                                        "flex-1 min-w-[200px] border-l border-gray-100 p-2 space-y-2 relative group/cell hover:bg-gray-50/50",
                                        isWeekend && "bg-gray-50/50"
                                     )}
                                  >
                                     {cellBlocks.map((block, i) => {
-                                        if (isCollapsed) {
-                                           return (
-                                              <div 
-                                                key={i} 
-                                                onClick={() => !block.isAbsence && setEditingMission({...block, startH_input: block.startTimeRaw, endH_input: block.endTimeRaw, emp_input: block.employeeId, adminNote: notes[block.missionId]?.adminNote || '', schemaNote: notes[block.missionId]?.schemaNote || ''})}
-                                                className={cn("w-full mb-1 py-1 rounded text-center cursor-pointer shadow-sm text-[8px] font-bold text-white", block.isAbsence ? "bg-red-400" : "bg-brand-accent hover:bg-emerald-500")}
-                                                title={`${block.startTimeRaw} - ${block.clientName || block.serviceName}`}
-                                              >
-                                                {block.startTimeRaw}
-                                              </div>
-                                           );
-                                        }
-
-                                        return (
-                                       <div 
-                                          key={i}
-                                          onClick={() => !block.isAbsence && setEditingMission({
-                                                ...block, 
+                                        const blockNonDraggable = block.isAbsence || !block.shiftId || dragDisabled;
+                                        const openEditor = () => !block.isAbsence && setEditingMission({
+                                                ...block,
                                                 startH_input: block.startTimeRaw,
                                                 endH_input: block.endTimeRaw,
                                                 emp_input: block.employeeId,
                                                 adminNote: notes[block.missionId]?.adminNote || '',
                                                 schemaNote: notes[block.missionId]?.schemaNote || ''
-                                          })}
+                                          });
+                                        if (isCollapsed) {
+                                           return (
+                                              <DraggableBlock
+                                                key={i}
+                                                block={block}
+                                                disabled={blockNonDraggable}
+                                                onClick={openEditor}
+                                                className={cn("w-full mb-1 py-1 rounded text-center cursor-pointer shadow-sm text-[8px] font-bold text-white", block.isAbsence ? "bg-red-400" : "bg-brand-accent hover:bg-emerald-500", !blockNonDraggable && "cursor-grab active:cursor-grabbing")}
+                                              >
+                                                <span title={`${block.startTimeRaw} - ${block.clientName || block.serviceName}`}>{block.startTimeRaw}</span>
+                                              </DraggableBlock>
+                                           );
+                                        }
+
+                                        return (
+                                       <DraggableBlock
+                                          key={i}
+                                          block={block}
+                                          disabled={blockNonDraggable}
+                                          onClick={openEditor}
                                           className={cn(
                                              "border shadow-sm rounded-lg p-2.5 text-left relative overflow-hidden transition-all",
-                                             block.isAbsence 
+                                             block.isAbsence
                                                 ? "bg-red-50/50 border-red-100 opacity-90 cursor-default"
-                                                : "bg-white border-gray-200 cursor-pointer hover:border-brand-accent hover:shadow-md"
+                                                : "bg-white border-gray-200 cursor-pointer hover:border-brand-accent hover:shadow-md",
+                                             !blockNonDraggable && "cursor-grab active:cursor-grabbing"
                                           )}
                                        >
                                           <div className={cn("w-1 absolute left-0 top-0 bottom-0", block.isAbsence ? "bg-red-400" : "bg-brand-accent")} />
@@ -474,7 +589,7 @@ export default function TimewaveScheduleGrid() {
                                                 </div>
                                              </div>
                                           )}
-                                       </div>
+                                       </DraggableBlock>
                                     );
                                     })}
 
@@ -483,7 +598,7 @@ export default function TimewaveScheduleGrid() {
                                           <span className="text-[10px] uppercase font-bold text-gray-300">Ledig</span>
                                        </div>
                                     )}
-                                 </div>
+                                 </DroppableCell>
                               );
                            })}
                         </div>
@@ -616,6 +731,81 @@ export default function TimewaveScheduleGrid() {
          </div>
       )}
 
+      {pendingMove && (
+        <div className="fixed bottom-6 right-6 z-[60] bg-brand-dark text-white text-xs font-bold rounded-lg px-4 py-2 shadow-lg flex items-center gap-2">
+          <Loader className="w-3 h-3 animate-spin" /> Flyttar passet i Timewave…
+        </div>
+      )}
+
+    </div>
+
+    <DragOverlay>
+      {dragging ? (
+        <div className="pointer-events-none border shadow-xl rounded-lg p-2.5 bg-white border-brand-accent w-[200px] scale-105">
+          <p className="text-[10px] font-bold uppercase tracking-wider mb-1 flex items-center gap-1.5 text-emerald-700">
+            <Clock className="w-3 h-3" /> {dragging.startTimeRaw} - {dragging.endTimeRaw}
+          </p>
+          <p className="text-xs font-bold text-brand-dark leading-tight truncate">{dragging.clientName}</p>
+          <p className="text-[9px] text-brand-accent/80 font-bold truncate mt-0.5">{dragging.serviceName}</p>
+        </div>
+      ) : null}
+    </DragOverlay>
+    </DndContext>
+  );
+}
+
+// ────────── Drag-and-drop hjälpkomponenter ──────────
+
+function DroppableCell({
+  employeeId,
+  dateStr,
+  className,
+  children,
+}: {
+  employeeId: string | number;
+  dateStr: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: `cell:${employeeId}:${dateStr}` });
+  return (
+    <div
+      ref={setNodeRef}
+      className={cn(className, isOver && 'bg-brand-accent/10 ring-2 ring-inset ring-brand-accent/40')}
+    >
+      {children}
+    </div>
+  );
+}
+
+function DraggableBlock({
+  block,
+  disabled,
+  className,
+  onClick,
+  children,
+}: {
+  block: any;
+  disabled?: boolean;
+  className?: string;
+  onClick?: () => void;
+  children: React.ReactNode;
+}) {
+  const dragId = `block:${block.shiftId ?? `m${block.missionId}`}:${block.employeeId}:${block.date}`;
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: dragId,
+    data: { block },
+    disabled,
+  });
+  return (
+    <div
+      ref={setNodeRef}
+      {...listeners}
+      {...attributes}
+      onClick={onClick}
+      className={cn(className, isDragging && 'opacity-30')}
+    >
+      {children}
     </div>
   );
 }
