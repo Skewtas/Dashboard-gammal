@@ -590,7 +590,7 @@ const OverviewView = () => {
           ) : (
             <div className="mt-5 space-y-2">
               {[
-                { key: 'lt3mo' as const, label: '< 3 mån', color: 'bg-red-300' },
+                { key: 'lt3mo' as const, label: '2–3 mån', color: 'bg-red-300' },
                 { key: '3to6mo' as const, label: '3–6 mån', color: 'bg-amber-300' },
                 { key: '6to12mo' as const, label: '6–12 mån', color: 'bg-yellow-400' },
                 { key: '1to2yr' as const, label: '1–2 år', color: 'bg-emerald-400' },

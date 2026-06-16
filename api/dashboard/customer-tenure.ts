@@ -148,11 +148,16 @@ async function computeTenureFromInvoices(windowMonths: number): Promise<TenureRe
   const activeCutoff = new Date(today.getTime() - 90 * 24 * 3600 * 1000);
   const activeCutoffStr = formatDate(activeCutoff);
 
+  // En "kund" ska ha minst två fakturor — annars är det ett engångsjobb och
+  // inte en återkommande relation. Och tenure < 2 mån räknas som "för nytt
+  // för att räknas" — exkluderas helt.
   const tenures: number[] = [];
   let oldestMonths = 0;
   for (const [, info] of byClient) {
     if (info.last < activeCutoffStr) continue;
+    if (info.count < 2) continue; // engångsjobb hoppas över
     const months = monthsBetween(new Date(info.first), today);
+    if (months < 2) continue; // för ny relation
     tenures.push(months);
     if (months > oldestMonths) oldestMonths = months;
   }
@@ -174,7 +179,8 @@ async function computeTenureFromInvoices(windowMonths: number): Promise<TenureRe
     averageMonths: Math.round(avg * 10) / 10,
     medianMonths: Math.round(median * 10) / 10,
     buckets: {
-      lt3mo: tenures.filter((t) => t < 3).length,
+      // Min 2 mån — anything kortare är exkluderat
+      lt3mo: tenures.filter((t) => t >= 2 && t < 3).length,
       '3to6mo': tenures.filter((t) => t >= 3 && t < 6).length,
       '6to12mo': tenures.filter((t) => t >= 6 && t < 12).length,
       '1to2yr': tenures.filter((t) => t >= 12 && t < 24).length,
