@@ -26,7 +26,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const snap = await prisma.dashboardSnapshot.findUnique({ where: { key: KEY } });
-  if (!snap) {
+  const cachedData = snap?.data as any;
+  const cachedLooksValid = cachedData && typeof cachedData.totalJobs === 'number';
+
+  if (!snap || !cachedLooksValid) {
     try {
       const data = await refreshAndStore(req);
       return res.json({ ...data, cached: false, stale: false, ageMinutes: 0 });
@@ -38,7 +41,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const ageMs = Date.now() - snap.computedAt.getTime();
   const stale = ageMs > STALE_MINUTES * 60_000;
   res.json({
-    ...(snap.data as any),
+    ...cachedData,
     cached: true,
     stale,
     ageMinutes: Math.round(ageMs / 60000),
@@ -47,13 +50,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 }
 
 async function refreshAndStore(req: VercelRequest): Promise<any> {
-  await prisma.dashboardSnapshot.upsert({
+  // Markera bara "refreshing" på en BEFINTLIG rad — skapar ingen tom rad
+  // som riskerar att cachas som "ingen data" om fetch:en sen failar.
+  await prisma.dashboardSnapshot.updateMany({
     where: { key: KEY },
-    create: { key: KEY, data: {} as any, refreshing: true },
-    update: { refreshing: true },
+    data: { refreshing: true },
   });
   try {
     const data = await compute(req);
+    // Sanity-check: vägra cacha skräp
+    if (!data || typeof data !== 'object' || typeof data.totalJobs !== 'number') {
+      throw new Error('compute returned invalid data shape');
+    }
     await prisma.dashboardSnapshot.upsert({
       where: { key: KEY },
       create: { key: KEY, data: data as any, refreshing: false, computedAt: new Date() },
@@ -61,7 +69,7 @@ async function refreshAndStore(req: VercelRequest): Promise<any> {
     });
     return data;
   } catch (err) {
-    await prisma.dashboardSnapshot.update({
+    await prisma.dashboardSnapshot.updateMany({
       where: { key: KEY },
       data: { refreshing: false },
     }).catch(() => {});

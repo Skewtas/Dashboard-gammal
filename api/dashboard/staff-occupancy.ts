@@ -44,16 +44,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 }
 
 async function refreshAndStore(req: VercelRequest): Promise<any> {
-  await prisma.dashboardSnapshot.upsert({
+  await prisma.dashboardSnapshot.updateMany({
     where: { key: KEY },
-    create: { key: KEY, data: {} as any, refreshing: true },
-    update: { refreshing: true },
+    data: { refreshing: true },
   });
   try {
     const baseUrl = process.env.APP_URL || `https://${req.headers.host}`;
     const r = await fetch(`${baseUrl}/api/timewave-summary/staff`);
     if (!r.ok) throw new Error(`staff fetch failed: ${r.status}`);
     const data = await r.json();
+    // Sanity-check: vägra cacha skräp
+    if (!data || !Array.isArray(data.employees) || data.employees.length === 0) {
+      throw new Error('staff fetch returned no employees');
+    }
     await prisma.dashboardSnapshot.upsert({
       where: { key: KEY },
       create: { key: KEY, data: data as any, refreshing: false, computedAt: new Date() },
@@ -61,7 +64,7 @@ async function refreshAndStore(req: VercelRequest): Promise<any> {
     });
     return data;
   } catch (err) {
-    await prisma.dashboardSnapshot.update({
+    await prisma.dashboardSnapshot.updateMany({
       where: { key: KEY },
       data: { refreshing: false },
     }).catch(() => {});
