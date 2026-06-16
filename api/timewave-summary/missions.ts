@@ -37,42 +37,44 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     } catch { /* ignore */ }
 
-    // Fetch first page to get lastPage
-    const urlBase = `${timewaveBaseUrl}/missions?filter[startdate]=${startDate}&filter[enddate]=${endDate}`;
-    let response = await fetch(`${urlBase}&page[number]=1`, {
-      headers: { "Authorization": `Bearer ${token}`, "Accept": "application/json" }
-    });
-
-    // Retry on 403
-    if (response.status === 403) {
-      token = await forceRefreshTimewaveToken();
-      response = await fetch(`${urlBase}&page[number]=1`, {
-        headers: { "Authorization": `Bearer ${token}`, "Accept": "application/json" }
+    // Fetch first page to get lastPage. Använder page[size]=200 så vi
+    // behöver färre HTTP-anrop och inte triggar Timewaves rate-limit.
+    const urlBase = `${timewaveBaseUrl}/missions?filter[startdate]=${startDate}&filter[enddate]=${endDate}&page[size]=200`;
+    const fetchPage = async (p: number, retry = true): Promise<any> => {
+      let r = await fetch(`${urlBase}&page[number]=${p}`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       });
-    }
-
-    if (!response.ok) {
-      throw new Error(`Timewave API error ${response.status}: ${await response.text()}`);
-    }
-
-    const firstData = await response.json();
+      if (r.status === 403 && retry) {
+        token = await forceRefreshTimewaveToken();
+        return fetchPage(p, false);
+      }
+      if (r.status === 429) {
+        // Backa, vänta 1 s, försök igen en gång
+        await new Promise((res) => setTimeout(res, 1000));
+        r = await fetch(`${urlBase}&page[number]=${p}`, {
+          headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+        });
+      }
+      if (!r.ok) throw new Error(`Timewave ${r.status}: ${await r.text().catch(() => '')}`);
+      return r.json();
+    };
+    const firstData = await fetchPage(1);
     lastPage = firstData.last_page || 1;
     allMissions = allMissions.concat(firstData.data || []);
 
-    // Fetch remaining pages in parallel
+    // Resterande sidor i batchar om 4 samtidigt (istället för alla på en gång)
     if (lastPage > 1) {
-      const fetchPromises = [];
-      for (let p = 2; p <= lastPage; p++) {
-        fetchPromises.push(
-          fetch(`${urlBase}&page[number]=${p}`, {
-            headers: { "Authorization": `Bearer ${token}`, "Accept": "application/json" }
-          }).then(r => r.json())
+      const PAR = 4;
+      for (let p = 2; p <= lastPage; p += PAR) {
+        const batch: number[] = [];
+        for (let i = 0; i < PAR && p + i <= lastPage; i++) batch.push(p + i);
+        const results = await Promise.all(
+          batch.map((pn) => fetchPage(pn).catch((e) => { console.error('missions page', pn, e.message); return { data: [] }; }))
         );
+        results.forEach((data: any) => {
+          allMissions = allMissions.concat(data.data || []);
+        });
       }
-      const results = await Promise.all(fetchPromises);
-      results.forEach(data => {
-        allMissions = allMissions.concat(data.data || []);
-      });
     }
 
     // Reinforce the employee-name map from mission payloads themselves.
