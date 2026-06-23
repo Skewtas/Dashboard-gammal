@@ -496,6 +496,9 @@ function TaskRow({
   const [draftOwner, setDraftOwner] = useState(task.owner ?? '');
   const [editingDeadline, setEditingDeadline] = useState(false);
   const [draftDeadline, setDraftDeadline] = useState(task.deadline ? task.deadline.slice(0, 10) : '');
+  // När man bockar av en task: visa "Klart!" en stund innan raden försvinner
+  // ur listan (annars känns det som om man bara missade ett klick).
+  const [justCompleted, setJustCompleted] = useState(false);
 
   const isDone = task.status === 'DONE' || task.status === 'CANCELLED';
 
@@ -504,8 +507,23 @@ function TaskRow({
     onReload();
   };
 
-  const toggleDone = () =>
-    patch({ status: task.status === 'DONE' ? 'OPEN' : 'DONE' });
+  const toggleDone = async () => {
+    const nextStatus = task.status === 'DONE' ? 'OPEN' : 'DONE';
+    if (nextStatus === 'DONE') {
+      setJustCompleted(true);
+      await api(`/api/ops/tasks/${task.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ status: 'DONE' }),
+      });
+      // Låt celebration synas ~700ms innan listan refetchar
+      setTimeout(() => {
+        setJustCompleted(false);
+        onReload();
+      }, 700);
+    } else {
+      patch({ status: 'OPEN' });
+    }
+  };
 
   const setStatus = (status: Status) => patch({ status });
 
@@ -538,18 +556,31 @@ function TaskRow({
   const hasDetails = task.nextStep || task.notes || task.relatedTo;
 
   return (
-    <div className={`border-t border-gray-100 group ${isDone ? 'opacity-50' : ''}`}>
+    <div
+      className={`border-t border-gray-100 group transition-all duration-500 ${
+        justCompleted
+          ? 'bg-emerald-50 ring-1 ring-emerald-200'
+          : isDone
+            ? 'opacity-50'
+            : ''
+      }`}
+    >
       <div className="px-4 py-2.5 flex items-center gap-3">
         <button
           onClick={toggleDone}
-          className={`w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center ${
-            task.status === 'DONE'
-              ? 'bg-emerald-500 border-emerald-500 text-white'
+          className={`w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center transition-all ${
+            task.status === 'DONE' || justCompleted
+              ? 'bg-emerald-500 border-emerald-500 text-white scale-110'
               : 'border-gray-300 hover:border-brand-accent'
           }`}
         >
-          {task.status === 'DONE' && <Check className="w-3 h-3" />}
+          {(task.status === 'DONE' || justCompleted) && <Check className="w-3 h-3" />}
         </button>
+        {justCompleted && (
+          <span className="text-xs font-bold text-emerald-700 uppercase tracking-wider animate-pulse">
+            Klart!
+          </span>
+        )}
 
         {hasDetails && (
           <button
