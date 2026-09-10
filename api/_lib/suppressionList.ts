@@ -24,9 +24,30 @@ const HARD_BLOCK_EMAILS = new Set<string>([
   'malin.andersson120@hotmail.com',
   'elisabet.ek@ihm.se',
   'gabriellanehme95@gmail.com',
+  // Avregistrerade 2026-09-10 — begärt av Mikaela, får aldrig utskick igen
+  'josef@premiumperformance.se',
+  'tobias.franzen@beltton.se',
+  'info@nordicnest.com',
 ].map((e) => e.toLowerCase()));
 
-const HARD_BLOCK_EMAIL_DOMAINS = ['@kleer.se', '@ihm.se'];
+// Hela domäner som aldrig får utskick. Matchas mot både "@domän" och
+// ".domän" så att subdomäner (t.ex. namn@mail.abax.se) också blockeras.
+const HARD_BLOCK_EMAIL_DOMAINS = [
+  'kleer.se',
+  'ihm.se',
+  // Avregistrerade 2026-09-10 — begärt av Mikaela
+  'elitfonster.se',
+  'redcross.se',
+  'rekyl.nu',
+  'tretti.se',
+  'abax.no',
+  'abax.se',
+];
+
+/** True om adressen ligger på en hårdblockad domän (inkl. subdomäner). */
+function isHardBlockedDomain(e: string): boolean {
+  return HARD_BLOCK_EMAIL_DOMAINS.some((d) => e.endsWith('@' + d) || e.endsWith('.' + d));
+}
 
 // Lagras utan ledande 0 så att både 07xxxxxxxx och +467xxxxxxxx matchar
 const HARD_BLOCK_PHONE_DIGITS = [
@@ -64,7 +85,7 @@ export async function isBlockedEmail(email: string | null | undefined): Promise<
   const e = normalizeEmail(email);
   if (!e || !e.includes('@')) return false;
   if (HARD_BLOCK_EMAILS.has(e)) return true;
-  if (HARD_BLOCK_EMAIL_DOMAINS.some((d) => e.endsWith(d))) return true;
+  if (isHardBlockedDomain(e)) return true;
   const opt = await loadOptOuts();
   return opt.emails.has(e);
 }
@@ -89,7 +110,7 @@ export async function filterAllowedEmails(emails: (string | null | undefined)[])
     .filter((e) => {
       if (!e || !e.includes('@')) return false;
       if (HARD_BLOCK_EMAILS.has(e)) return false;
-      if (HARD_BLOCK_EMAIL_DOMAINS.some((d) => e.endsWith(d))) return false;
+      if (isHardBlockedDomain(e)) return false;
       if (opt.emails.has(e)) return false;
       return true;
     });
