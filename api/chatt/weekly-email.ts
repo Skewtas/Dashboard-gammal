@@ -109,6 +109,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   <p style="color:#8b8578;font-size:12px;margin:24px 0 0;">Frågorna är anonymiserade och raderas efter 90 dagar. Mer i fliken CHATT i <a href="${esc(appUrl)}" style="color:#1a1a2e;">Head of</a>.</p>
 </div>`;
 
+  // Innan chatten är live finns inga samtal – skicka inte ett tomt mejl varje måndag.
+  if (antalSamtal === 0 && req.query.force !== '1') {
+    return res.json({ ok: true, skipped: true, message: 'Inga chattsamtal förra veckan — inget mejl skickat.', vecka });
+  }
+
   const recipients = (process.env.CHAT_REPORT_EMAILS || 'info@stodona.se').split(',').map((s) => s.trim()).filter(Boolean);
   const fromAddress = process.env.SMTP_FROM || process.env.SMTP_USER || 'info@stodona.se';
 
