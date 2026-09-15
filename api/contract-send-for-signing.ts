@@ -129,6 +129,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         subject: `Signera ditt anställningsavtal — ${contract.ownCompany.name}`,
         htmlContent: html,
         appUrl,
+        transactional: true, // Signeringsmail får inte blockeras av suppression
       });
     } catch (e: any) {
       deliverError = e?.message || String(e);

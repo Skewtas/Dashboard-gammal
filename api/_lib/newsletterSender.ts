@@ -104,6 +104,13 @@ export interface SendNewsletterOpts {
    * tillbaka kön och fortsätta i nästa funktionsanrop.
    */
   budgetMs?: number;
+  /**
+   * Sätt till true för TRANSAKTIONELLA utskick (avtalssignering, kvitton,
+   * lösenord-återställning). Då hoppas suppression-listan över — de här
+   * mailen är obligatoriska för mottagaren, inte marknadsföring.
+   * Default: false (marknadsföring → filtrera bort blockade).
+   */
+  transactional?: boolean;
 }
 
 export interface SendNewsletterResult {
@@ -118,14 +125,22 @@ export interface SendNewsletterResult {
  * Does NOT create or update any Newsletter row — caller is responsible.
  */
 export async function deliverNewsletter(opts: SendNewsletterOpts): Promise<SendNewsletterResult> {
-  const { newsletterId, recipients: rawRecipients, subject, introText, imageData, embedUrl, htmlContent, appUrl } = opts;
+  const { newsletterId, recipients: rawRecipients, subject, introText, imageData, embedUrl, htmlContent, appUrl, transactional } = opts;
   const fromAddress = process.env.SMTP_FROM || process.env.SMTP_USER || 'info@stodona.se';
 
-  // SISTA-CHANSEN filter: även om upstream missat att filtrera bort blockade
-  // adresser så stoppas de här. Ingen kod-väg kan skicka utan att passera
-  // denna funktion.
-  const { filterAllowedEmails } = await import('./suppressionList.js');
-  const recipients = await filterAllowedEmails(rawRecipients);
+  // SISTA-CHANSEN filter för MARKNADSUTSKICK: även om upstream missat att
+  // filtrera bort blockade adresser så stoppas de här. Ingen marknadsförings-
+  // kodväg kan skicka utan att passera detta.
+  //
+  // TRANSAKTIONELLA utskick (avtalssignering, kvitton, lösenord) hoppar
+  // över detta — mottagaren MÅSTE få dem oavsett vad suppression säger.
+  let recipients: string[];
+  if (transactional) {
+    recipients = rawRecipients.filter((e) => e && e.includes('@'));
+  } else {
+    const { filterAllowedEmails } = await import('./suppressionList.js');
+    recipients = await filterAllowedEmails(rawRecipients);
+  }
 
   let sent = 0;
   const failedRecipients: string[] = [];
