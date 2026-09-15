@@ -40,7 +40,8 @@ import {
   Target,
   ListChecks,
   FileText,
-  Heart
+  Heart,
+  MessageCircle
 } from 'lucide-react';
 import {
   BarChart,
@@ -70,6 +71,7 @@ import SjukfranvaroTestView from './SjukfranvaroTestView';
 import PersonalbrevView from './PersonalbrevView';
 import OnlineBookingsTrend from './OnlineBookingsTrend';
 import SigningView from './SigningView';
+import ChatView from './ChatView';
 
 // Utility for Tailwind classes
 function cn(...inputs: ClassValue[]) {
@@ -2170,6 +2172,7 @@ export default function App() {
     { id: 'sjukfranvaro-test', label: 'SJUKFRÅNVARO', icon: Heart },
     { id: 'personalbrev', label: 'PERSONALBREV', icon: Send },
     { id: 'email', label: 'E-POST UTSKICK', icon: Mail },
+    { id: 'chatt', label: 'CHATT', icon: MessageCircle },
     { id: 'import', label: 'IMPORTERA FRÅN TIMEWAVE', icon: RefreshCw },
     // Dolda flikar — KUNDER / PERSONAL / ACTIONLISTA / ÄRENDEHANTERING / MAIL.
     // Komponenterna ligger kvar i koden och kan visas igen med en rad här.
@@ -2259,6 +2262,7 @@ export default function App() {
               {activeTab === 'sjukfranvaro-test' && <SjukfranvaroTestView />}
               {activeTab === 'personalbrev' && <PersonalbrevView />}
               {activeTab === 'import' && <ImportView />}
+              {activeTab === 'chatt' && <ChatView />}
             </div>
           </main>
         </div>

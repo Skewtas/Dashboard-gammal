@@ -1239,3 +1239,37 @@ model SickLeaveCaseEvent {
   @@index([caseId, createdAt(sort: Desc)])
   @@map("sick_leave_case_events")
 }
+
+/// Chattstatistik från Camilla på stodona.se – en rad per dag, sparas långsiktigt.
+/// Bara siffror, inga personuppgifter. Fylls av api/chatt/import-daily.
+model ChatDagStatistik {
+  id          Int      @id @default(autoincrement())
+  date        DateTime @unique @db.Date
+  antalSamtal Int      @default(0) @map("antal_samtal")
+  antalFragor Int      @default(0) @map("antal_fragor")
+  amnen       Json     @default("{}")
+  utfall      Json     @default("{}")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@index([date(sort: Desc)])
+  @@map("chat_daily_stats")
+}
+
+/// Anonymiserade frågor från chatten (telefon, e-post, personnummer, adress och
+/// namn är bortrensade på stodona.se innan de lämnas ut). Raderas efter 90 dagar
+/// av api/chatt/import-daily – Stodonas beslut 2026-09-15.
+model ChatFraga {
+  id        Int      @id @default(autoincrement())
+  date      DateTime @db.Date
+  samtalsId String   @map("samtals_id")
+  tid       DateTime
+  text      String
+  amnen     String[]
+  utfall    String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([date(sort: Desc)])
+  @@map("chat_questions")
+}
+

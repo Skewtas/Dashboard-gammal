@@ -4,6 +4,14 @@
   "framework": "vite",
   "crons": [
     {
+      "path": "/api/chatt/import-daily",
+      "schedule": "30 0 * * *"
+    },
+    {
+      "path": "/api/chatt/weekly-email",
+      "schedule": "0 6 * * 1"
+    },
+    {
       "path": "/api/automations/daily",
       "schedule": "0 3 * * *"
     },
