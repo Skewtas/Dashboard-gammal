@@ -382,6 +382,14 @@ function SigningActions({ contract, onReload }: { contract: Contract; onReload: 
         >
           {busy ? 'Signerar…' : 'Signera som arbetsgivare'}
         </button>
+        <button
+          onClick={sendForSigning}
+          disabled={busy}
+          className="text-[11px] px-2 py-1 border border-gray-300 text-brand-muted rounded hover:bg-gray-50 disabled:opacity-50"
+          title="Skicka en ny signeringslänk till anställd (t.ex. om första mailet fastnade i skräp)"
+        >
+          {busy ? 'Skickar…' : 'Skicka länk igen'}
+        </button>
         {resultBox}
       </div>
     );

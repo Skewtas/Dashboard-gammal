@@ -135,14 +135,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       deliverError = e?.message || String(e);
     }
 
-    const mailSent = deliverResult && deliverResult.sent > 0;
+    // Kontrollera SPECIFIKT att den anställdes mail gick iväg — inte bara
+    // Mikaelas kopia. En tidigare bugg lät oss räkna 'skickat' när bara
+    // Mikaela fick mailet och den anställdes del blockerades tyst.
+    const employeeEmailLc = employeeEmail.toLowerCase();
+    const failedList = (deliverResult?.failedRecipients || []).map((x: string) => x.toLowerCase());
+    const employeeMailFailed = failedList.includes(employeeEmailLc);
+    const mailSent = deliverResult && deliverResult.sent > 0 && !employeeMailFailed;
     if (!mailSent) {
       return res.status(500).json({
-        error: '❌ Mailet gick inte iväg.',
+        error: employeeMailFailed
+          ? `❌ Mailet gick INTE iväg till anställd (${employeeEmail}) — Mikaelas kopia kom fram men mottagaren blockerades.`
+          : '❌ Mailet gick inte iväg.',
         debug: {
           resendConfigured: !!process.env.RESEND_API_KEY,
           fromAddress: fromAddr,
           recipients,
+          employeeEmail,
+          employeeMailFailed,
           deliverResult,
           deliverError,
           signUrl,
