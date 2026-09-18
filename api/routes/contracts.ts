@@ -18,16 +18,21 @@ import { requireAuth, getUserId } from '../_lib/auth.js';
 const router = express.Router();
 router.use(requireAuth);
 
+// Fallback när env-var saknas — Mikaela + Ella (info@stodona.se) har
+// full superadmin-behörighet på avtal (create, edit, sign, dela, radera).
 const SUPERADMIN_EMAILS = (
-  process.env.CONTRACT_SUPERADMIN_EMAILS || 'mikaela.wigert@stodona.se'
+  process.env.CONTRACT_SUPERADMIN_EMAILS ||
+  'mikaela.wigert@stodona.se,info@stodona.se'
 )
   .split(',')
   .map((s) => s.trim().toLowerCase())
   .filter(Boolean);
 
-// HR_VIEWER: ser BARA anställningsavtal + HR-cases (INTE kund/leverantör/övrigt)
+// HR_VIEWER: tidigare bara läsvy för anställningsavtal. Ella har lyfts
+// till full superadmin ovan, men vi behåller listan tom-som-default så
+// framtida användare kan läggas till här när enbart läs-behörighet räcker.
 const HR_VIEWER_EMAILS = (
-  process.env.HR_VIEWER_EMAILS || 'info@stodona.se'
+  process.env.HR_VIEWER_EMAILS || ''
 )
   .split(',')
   .map((s) => s.trim().toLowerCase())
