@@ -1,11 +1,15 @@
 <!doctype html>
-<html lang="en">
+<html lang="sv">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Blockera Google Translate + browser-extensions från att mutera DOM.
+         Utan detta får vissa användare removeChild-krascher när React
+         försöker unmount:a element som Translate ersatt med <font>-taggar. -->
+    <meta name="google" content="notranslate" />
     <title>Dashboard</title>
   </head>
-  <body>
+  <body class="notranslate" translate="no">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

@@ -316,7 +316,15 @@ export default function ContractWizard({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={onClose}>
+    // translate="no" + className "notranslate" hindrar Google Translate/browser-
+    // extensions från att mutera DOM inuti wizarden. Utan detta får vissa
+    // användare (Ella, Chrome med Translate på) removeChild-krascher vid
+    // step-övergångar eftersom React och DOM inte längre matchar.
+    <div
+      className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4 notranslate"
+      translate="no"
+      onClick={onClose}
+    >
       <div className="bg-white rounded-2xl max-w-4xl w-full shadow-2xl overflow-hidden flex flex-col max-h-[92vh]" onClick={(e) => e.stopPropagation()}>
         <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
           <div className="flex items-center gap-2">
