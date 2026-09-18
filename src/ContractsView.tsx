@@ -166,14 +166,16 @@ export default function ContractsView() {
       )}
 
       {wizardOpen && (
-        <ContractWizard
-          companies={companies}
-          onClose={() => setWizardOpen(false)}
-          onDone={async () => {
-            setWizardOpen(false);
-            await reload();
-          }}
-        />
+        <WizardErrorBoundary onClose={() => setWizardOpen(false)}>
+          <ContractWizard
+            companies={companies}
+            onClose={() => setWizardOpen(false)}
+            onDone={async () => {
+              setWizardOpen(false);
+              await reload();
+            }}
+          />
+        </WizardErrorBoundary>
       )}
 
       {/* KPI-strip */}
@@ -678,4 +680,60 @@ function Row({ label, required, children }: { label: string; required?: boolean;
       {children}
     </div>
   );
+}
+
+/**
+ * Error boundary runt ContractWizard.
+ * Fångar oväntade fel (t.ex. templates.map på fel datastruktur) och
+ * visar felmeddelande istället för whitescreen. Så vi ser vad som gick
+ * fel utan att appen dör helt.
+ */
+class WizardErrorBoundary extends React.Component<
+  { children: React.ReactNode; onClose: () => void },
+  { error: Error | null }
+> {
+  constructor(props: any) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error('[ContractWizard] crash:', error, info);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl p-6">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="w-6 h-6 text-red-500 flex-shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <h3 className="font-serif text-lg text-brand-dark">Avtalsguiden kraschade</h3>
+                <p className="text-sm text-brand-muted mt-1">
+                  Ett tekniskt fel gjorde att guiden inte kunde öppnas. Har delats med
+                  utvecklaren. Prova stänga och öppna på nytt — om det upprepas, skicka
+                  felmeddelandet nedan.
+                </p>
+                <pre className="mt-3 text-[11px] p-2 bg-red-50 border border-red-200 rounded overflow-auto max-h-40 whitespace-pre-wrap text-red-900">
+                  {this.state.error.message}
+                  {this.state.error.stack ? '\n\n' + this.state.error.stack.split('\n').slice(0, 5).join('\n') : ''}
+                </pre>
+                <div className="mt-4 flex gap-2 justify-end">
+                  <button
+                    onClick={() => { this.setState({ error: null }); this.props.onClose(); }}
+                    className="text-xs px-4 py-2 bg-brand-dark text-white rounded-lg hover:bg-brand-dark/90"
+                  >
+                    Stäng
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }

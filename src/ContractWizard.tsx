@@ -140,12 +140,22 @@ export default function ContractWizard({
   const [twId, setTwId] = useState<number | null>(null);
 
   useEffect(() => {
-    api<Template[]>('/api/contracts/templates').then(setTemplates).catch(() => setTemplates([]));
+    // Härdad mot backend som råkar returnera ett fel-objekt istället för
+    // array (t.ex. {error: '...'} med 200-status) — det gav whitescreen
+    // för HR-viewer eftersom setTemplates(<objekt>) senare kraschade i .map()
+    api<Template[] | { error?: string; data?: Template[] }>('/api/contracts/templates')
+      .then((d) => {
+        if (Array.isArray(d)) setTemplates(d);
+        else if (Array.isArray((d as any)?.data)) setTemplates((d as any).data);
+        else setTemplates([]);
+      })
+      .catch(() => setTemplates([]));
     // Timewave-listan är oftast ~40 anställda — hämta hela och filtrera lokalt
     fetch('/api/timewave/employees?page[size]=200')
       .then((r) => (r.ok ? r.json() : { data: [] }))
       .then((d: { data?: TimewaveEmployee[] }) => {
-        setTwEmployees((d.data || []).filter((e) => !e.deleted && e.status === 'active'));
+        const rows = Array.isArray(d?.data) ? d.data : [];
+        setTwEmployees(rows.filter((e) => !e.deleted && e.status === 'active'));
       })
       .catch(() => setTwEmployees([]));
   }, []);
