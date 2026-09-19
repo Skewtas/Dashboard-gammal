@@ -1273,3 +1273,24 @@ model ChatFraga {
   @@map("chat_questions")
 }
 
+/**
+ * Hela dialogen från chatten på stodona.se — sparas i 7 dagar för att
+ * personal ska kunna söka i vad kunder skriver.
+ *
+ * GDPR-känsligt: innehåller det kunder faktiskt skrivit (inte anonymiserat).
+ * Cron chatt/purge-old raderar automatiskt allt äldre än 7 dagar.
+ */
+model ChatDialog {
+  id           Int      @id @default(autoincrement())
+  samtalsId    String   @unique @map("samtals_id")
+  date         DateTime @db.Date
+  meddelanden  Json     // [{role: 'user'|'assistant', content: string, verktyg?: true}]
+  antalMeddelanden Int  @default(0) @map("antal_meddelanden")
+  sokText      String   @db.Text @map("sok_text") // hela dialogen som sammanlagd text för snabb ILIKE-sökning
+  importedAt   DateTime @default(now()) @map("imported_at")
+
+  @@index([date(sort: Desc)])
+  @@index([samtalsId])
+  @@map("chat_dialogs")
+}
+

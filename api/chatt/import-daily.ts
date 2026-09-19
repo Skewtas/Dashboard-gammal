@@ -21,6 +21,7 @@ import { prisma } from '../_lib/prisma.js';
 export const config = { maxDuration: 60 };
 
 const LAGRINGSDAGAR_FRAGOR = 90;
+const LAGRINGSDAGAR_DIALOGER = 7; // Mikaela 2026-09-19: "de kan tas bort efter en vecka"
 
 type Samtal = {
   id: string;
@@ -111,15 +112,58 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         prisma.chatFraga.createMany({ data: fragor }),
       ]);
 
-      resultat.push({ dag, samtal: siffror.antalSamtal, fragor: fragor.length });
+      // Hela dialoger (sparas 7 dagar för sökbarhet). Om endpointen inte
+      // finns eller returnerar tomt hoppar vi över — statistik/frågor
+      // fungerar oberoende.
+      let dialogerImporterade = 0;
+      try {
+        const dr = await fetch(`${bas}/api/chat-dialog?dag=${dag}`, {
+          headers: { Authorization: `Bearer ${statsSecret}` },
+        });
+        if (dr.ok) {
+          const dd = (await dr.json()) as {
+            dialoger: Array<{ id: string; meddelanden: Array<{ role: string; content: string }> }>;
+          };
+          for (const dial of dd.dialoger || []) {
+            if (!dial.id || !Array.isArray(dial.meddelanden) || dial.meddelanden.length === 0) continue;
+            const sokText = dial.meddelanden.map((m) => m.content || '').join(' \n ').slice(0, 50_000);
+            await prisma.chatDialog.upsert({
+              where: { samtalsId: dial.id },
+              create: {
+                samtalsId: dial.id,
+                date: datum,
+                meddelanden: dial.meddelanden as any,
+                antalMeddelanden: dial.meddelanden.length,
+                sokText,
+              },
+              update: {
+                date: datum,
+                meddelanden: dial.meddelanden as any,
+                antalMeddelanden: dial.meddelanden.length,
+                sokText,
+                importedAt: new Date(),
+              },
+            });
+            dialogerImporterade++;
+          }
+        }
+      } catch (e: any) {
+        console.error(`[chatt/import-daily] dialoger ${dag}:`, e?.message);
+      }
+
+      resultat.push({ dag, samtal: siffror.antalSamtal, fragor: fragor.length, dialoger: dialogerImporterade });
     } catch (e: any) {
       console.error(`[chatt/import-daily] ${dag}:`, e?.message);
       resultat.push({ dag, fel: e?.message ?? 'okänt fel' });
     }
   }
 
-  const grans = new Date(Date.now() - LAGRINGSDAGAR_FRAGOR * 24 * 3600 * 1000);
-  const rensade = await prisma.chatFraga.deleteMany({ where: { date: { lt: grans } } });
+  const gransFragor = new Date(Date.now() - LAGRINGSDAGAR_FRAGOR * 24 * 3600 * 1000);
+  const rensade = await prisma.chatFraga.deleteMany({ where: { date: { lt: gransFragor } } });
 
-  return res.json({ ok: true, resultat, rensadeFragor: rensade.count });
+  // Dialoger raderas efter 7 dagar (GDPR — Mikaelas beslut 2026-09-19)
+  const gransDialoger = new Date(Date.now() - LAGRINGSDAGAR_DIALOGER * 24 * 3600 * 1000);
+  const rensadeDialoger = await prisma.chatDialog.deleteMany({ where: { date: { lt: gransDialoger } } });
+
+  return res.json({ ok: true, resultat, rensadeFragor: rensade.count, rensadeDialoger: rensadeDialoger.count });
 }
