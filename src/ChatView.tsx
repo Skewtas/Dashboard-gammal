@@ -17,6 +17,7 @@ interface Oversikt {
   utfall: Array<{ namn: string; antal: number }>;
   totalt: { samtal: number; fragor: number };
   fragor: Array<{ tid: string; text: string; amnen: string[]; utfall: string }>;
+  trafik?: { dagar: Array<{ date: string; besok: number }>; totalt: number; sidor: Array<{ sida: string; besok: number }> };
   senastUppdaterad: string | null;
 }
 
@@ -111,6 +112,42 @@ export default function ChatView() {
 
       {data && !laddar && (
         <>
+          {data.trafik && data.trafik.dagar.length > 0 && (
+            <div className="bg-white border border-gray-200 rounded-xl p-4">
+              <div className="flex items-center justify-between gap-3 mb-3">
+                <div>
+                  <div className="text-sm font-semibold text-brand-dark">Besök på stodona.se</div>
+                  <div className="text-[11px] text-brand-muted">
+                    Räknas av sajten själv, utan cookies – till skillnad från Google Analytics som bara räknar dem som klickat "Acceptera".
+                  </div>
+                </div>
+                <div className="text-right shrink-0">
+                  <div className="text-2xl font-semibold tabular-nums text-brand-dark">{data.trafik.totalt}</div>
+                  <div className="text-[11px] text-brand-muted">sidvisningar</div>
+                </div>
+              </div>
+              <div className="flex items-end gap-1 h-20">
+                {data.trafik.dagar.map((d) => {
+                  const max = Math.max(1, ...data.trafik!.dagar.map((x) => x.besok));
+                  return (
+                    <div key={d.date} className="flex-1 flex flex-col justify-end h-full" title={`${d.date}: ${d.besok} sidvisningar`}>
+                      <div className="w-full bg-brand-accent/70 rounded-t" style={{ height: `${(d.besok / max) * 100}%`, minHeight: d.besok ? 2 : 0 }} />
+                    </div>
+                  );
+                })}
+              </div>
+              {data.trafik.sidor.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-3">
+                  {data.trafik.sidor.map((s) => (
+                    <span key={s.sida} className="text-[11px] px-2 py-1 rounded bg-gray-50 text-brand-muted">
+                      {s.sida} · {s.besok}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             {[
               { label: 'Samtal', value: data.totalt.samtal },

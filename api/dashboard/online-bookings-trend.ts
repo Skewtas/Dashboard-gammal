@@ -6,19 +6,18 @@
  *   - weekly:  senaste 12 veckor
  *   - monthly: senaste 12 månader
  *
- * En "online-bokning" är samma definition som redan används i
- * timewave-summary/missions.ts — missions vars källa/tag innehåller
- * "online", "boka.stodona", "webform" eller "web".
+ * En "online-bokning" är en bokning i Bokis (boka.stodona.se), räknad den dag
+ * den skapades – alltså själva bokningsflödet, inte städdatumet. Avbokade
+ * räknas inte.
  *
- * Datum bestäms med följande prioordning:
- *   mission.created_at → mission.booked_at → mission.date_ordered → mission.startdate
- * Så vi räknar "bokning-flödet" när fältet finns, annars fallback till
- * städtillfället (bättre än ingenting).
+ * Tidigare gissades detta fram ur Timewave-taggar ("online", "boka.stodona",
+ * "webform", "web"). Ingen mission matchade, så siffran låg på noll varje dag i
+ * ett helt år trots hundratals bokningar i Bokis. Rättat 2026-09-23.
  *
  * Cachear i DashboardSnapshot i 30 min (samma mönster som overview-stats).
  */
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getTimewaveToken, forceRefreshTimewaveToken } from '../_lib/timewaveAuth.js';
+import { fetchBokisBookings, bokningsdagar } from '../_lib/bokis.js';
 import { prisma } from '../_lib/prisma.js';
 
 export const config = { maxDuration: 60 };
@@ -74,80 +73,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 }
 
-async function compute(req: VercelRequest): Promise<TrendResult> {
-  const timewaveBaseUrl = 'https://api.timewave.se/v3';
-  let token = await getTimewaveToken();
-
-  // Fönster: idag - 100 dagar → idag (för att täcka 12 veckor + lite marginal)
+async function compute(_req: VercelRequest): Promise<TrendResult> {
   const now = new Date();
+
+  // Fönster: 100 dagar bakåt, men minst 12 hela månader.
   const windowStart = new Date(now);
   windowStart.setDate(windowStart.getDate() - 100);
+  const monthlyStart = new Date(now.getFullYear(), now.getMonth() - (MONTHLY_WINDOW - 1), 1);
+  const effectiveStart = monthlyStart < windowStart ? monthlyStart : windowStart;
 
   const pad = (n: number) => String(n).padStart(2, '0');
   const iso = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 
-  // Vi behöver även månader bakåt — se till att fetch täcker 12 månader
-  const monthlyStart = new Date(now.getFullYear(), now.getMonth() - (MONTHLY_WINDOW - 1), 1);
-  const effectiveStart = monthlyStart < windowStart ? monthlyStart : windowStart;
-
-  const urlBase = `${timewaveBaseUrl}/missions?filter[startdate]=${iso(effectiveStart)}&filter[enddate]=${iso(now)}&page[size]=200`;
-  const fetchPage = async (p: number, retry = true): Promise<any> => {
-    let r = await fetch(`${urlBase}&page[number]=${p}`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
-    });
-    if (r.status === 403 && retry) {
-      token = await forceRefreshTimewaveToken();
-      return fetchPage(p, false);
-    }
-    if (r.status === 429) {
-      await new Promise((res) => setTimeout(res, 1000));
-      r = await fetch(`${urlBase}&page[number]=${p}`, {
-        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
-      });
-    }
-    if (!r.ok) throw new Error(`Timewave ${r.status}`);
-    return r.json();
-  };
-
-  const firstData = await fetchPage(1);
-  const lastPage = firstData.last_page || 1;
-  let missions: any[] = firstData.data || [];
-  if (lastPage > 1) {
-    const PAR = 4;
-    for (let p = 2; p <= lastPage; p += PAR) {
-      const batch: number[] = [];
-      for (let i = 0; i < PAR && p + i <= lastPage; i++) batch.push(p + i);
-      const results = await Promise.all(
-        batch.map((pn) => fetchPage(pn).catch(() => ({ data: [] })))
-      );
-      results.forEach((d: any) => { missions = missions.concat(d.data || []); });
-    }
-  }
-
-  // Filtrera bara online-bokningar + hitta bokningsdatum per mission
-  const isOnline = (m: any): boolean => {
-    const candidates = [
-      m.source, m.origin, m.channel,
-      m.workorder?.workordergroup?.name,
-      m.workordergroup?.name,
-      ...(Array.isArray(m.tags) ? m.tags.map((t: any) => t?.name).filter(Boolean) : []),
-    ].filter(Boolean).map((s: any) => String(s).toLowerCase());
-    return candidates.some((s) => s.includes('online') || s.includes('boka.stodona') || s.includes('webform') || s === 'web');
-  };
-  const bookingDate = (m: any): string | null => {
-    const raw = m.created_at || m.booked_at || m.date_ordered || m.order_date || m.startdate || m.date;
-    if (!raw) return null;
-    const s = String(raw).slice(0, 10);
-    return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
-  };
-
-  const onlineDates: string[] = [];
-  for (const m of missions) {
-    if (!isOnline(m)) continue;
-    if (!m.client?.id) continue; // samma villkor som existerande beräkningen
-    const d = bookingDate(m);
-    if (d) onlineDates.push(d);
-  }
+  const onlineDates = bokningsdagar(await fetchBokisBookings(), iso(effectiveStart));
 
   // Aggregera per dag
   const dailyMap = new Map<string, number>();

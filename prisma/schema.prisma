@@ -1294,3 +1294,18 @@ model ChatDialog {
   @@map("chat_dialogs")
 }
 
+/// Besök på stodona.se, räknade av sajten själv (middleware) utan cookies.
+/// Google Analytics räknar bara dem som klickat "Acceptera" – den här siffran
+/// går att lita på. Fylls av api/chatt/import-daily.
+model TrafikDagStatistik {
+  id        Int      @id @default(autoincrement())
+  date      DateTime @unique @db.Date
+  besok     Int      @default(0)
+  sidor     Json     @default("{}")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([date(sort: Desc)])
+  @@map("site_traffic_daily")
+}
+

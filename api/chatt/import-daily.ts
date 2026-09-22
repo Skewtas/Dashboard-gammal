@@ -151,7 +151,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         console.error(`[chatt/import-daily] dialoger ${dag}:`, e?.message);
       }
 
-      resultat.push({ dag, samtal: siffror.antalSamtal, fragor: fragor.length, dialoger: dialogerImporterade });
+      // Besök på sajten, räknade av stodona.se själv utan cookies. Om
+      // endpointen saknas hoppar vi över — chattstatistiken påverkas inte.
+      let besok: number | null = null;
+      try {
+        const tr = await fetch(`${bas}/api/trafik-statistik?dag=${dag}`, {
+          headers: { Authorization: `Bearer ${statsSecret}` },
+        });
+        if (tr.ok) {
+          const td = (await tr.json()) as { dagar?: Array<{ besok: number }>; sidor?: Record<string, number> };
+          besok = Number(td.dagar?.[0]?.besok ?? 0);
+          await prisma.trafikDagStatistik.upsert({
+            where: { date: datum },
+            create: { date: datum, besok, sidor: (td.sidor ?? {}) as any },
+            update: { besok, sidor: (td.sidor ?? {}) as any, updatedAt: new Date() },
+          });
+        }
+      } catch (e: any) {
+        console.error(`[chatt/import-daily] trafik ${dag}:`, e?.message);
+      }
+
+      resultat.push({ dag, samtal: siffror.antalSamtal, fragor: fragor.length, dialoger: dialogerImporterade, besok });
     } catch (e: any) {
       console.error(`[chatt/import-daily] ${dag}:`, e?.message);
       resultat.push({ dag, fel: e?.message ?? 'okänt fel' });

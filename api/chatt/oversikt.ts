@@ -44,9 +44,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const fran = new Date(`${new Date(Date.now() - (dagar - 1) * 24 * 3600 * 1000).toISOString().slice(0, 10)}T00:00:00.000Z`);
 
   try {
-    const [rader, fragor] = await Promise.all([
+    const [rader, fragor, trafik] = await Promise.all([
       prisma.chatDagStatistik.findMany({ where: { date: { gte: fran } }, orderBy: { date: 'asc' } }),
       prisma.chatFraga.findMany({ where: { date: { gte: fran } }, orderBy: { tid: 'desc' }, take: 1000 }),
+      // Besök på sajten, räknade utan cookies – se api/trafik-statistik på stodona.se.
+      prisma.trafikDagStatistik.findMany({ where: { date: { gte: fran } }, orderBy: { date: 'asc' } }),
     ]);
 
     res.setHeader('Cache-Control', 'private, no-store');
@@ -63,6 +65,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         fragor: rader.reduce((n, r) => n + r.antalFragor, 0),
       },
       fragor: fragor.map((f) => ({ tid: f.tid.toISOString(), text: f.text, amnen: f.amnen, utfall: f.utfall })),
+      trafik: {
+        dagar: trafik.map((t) => ({ date: t.date.toISOString().slice(0, 10), besok: t.besok })),
+        totalt: trafik.reduce((n, t) => n + t.besok, 0),
+        sidor: Object.entries((trafik[trafik.length - 1]?.sidor ?? {}) as Record<string, number>)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 8)
+          .map(([sida, besok]) => ({ sida, besok })),
+      },
       senastUppdaterad: rader.reduce<Date | null>((s, r) => (!s || r.updatedAt > s ? r.updatedAt : s), null)?.toISOString() ?? null,
     });
   } catch (e: any) {
