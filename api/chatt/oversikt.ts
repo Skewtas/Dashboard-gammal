@@ -48,7 +48,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       prisma.chatDagStatistik.findMany({ where: { date: { gte: fran } }, orderBy: { date: 'asc' } }),
       prisma.chatFraga.findMany({ where: { date: { gte: fran } }, orderBy: { tid: 'desc' }, take: 1000 }),
       // Besök på sajten, räknade utan cookies – se api/trafik-statistik på stodona.se.
-      prisma.trafikDagStatistik.findMany({ where: { date: { gte: fran } }, orderBy: { date: 'asc' } }),
+      // Saknas tabellen ännu (migrationen inte körd) ska fliken fungera ändå.
+      prisma.trafikDagStatistik
+        .findMany({ where: { date: { gte: fran } }, orderBy: { date: 'asc' } })
+        .catch((e: any) => {
+          console.error('[chatt/oversikt] trafik:', e?.message);
+          return [] as Array<{ date: Date; besok: number; sidor: unknown }>;
+        }),
     ]);
 
     res.setHeader('Cache-Control', 'private, no-store');
