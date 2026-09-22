@@ -53,7 +53,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .findMany({ where: { date: { gte: fran } }, orderBy: { date: 'asc' } })
         .catch((e: any) => {
           console.error('[chatt/oversikt] trafik:', e?.message);
-          return [] as Array<{ date: Date; besok: number; sidor: unknown }>;
+          return [] as Awaited<ReturnType<typeof prisma.trafikDagStatistik.findMany>>;
         }),
     ]);
 
