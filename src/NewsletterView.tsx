@@ -185,10 +185,13 @@ export default function NewsletterView() {
     clientTypes: { name: string; count: number }[];
     serviceTypes?: { name: string; count: number }[];
     patterns?: { name: string; count: number }[];
+    subscriptions?: { name: string; count: number }[];
   }>({ areas: [], clientTypes: [] });
   const [selectedAreas, setSelectedAreas] = useState<string[]>([]);
   const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
   const [selectedPatterns, setSelectedPatterns] = useState<string[]>([]);
+  const [selectedSubscriptions, setSelectedSubscriptions] = useState<string[]>([]);
+  const [customersSyncedAt, setCustomersSyncedAt] = useState<string | null>(null);
 
   // Computed: customers with phone numbers for SMS sending who haven't opted out
   const smsRecipients = React.useMemo(() => {
@@ -473,6 +476,7 @@ export default function NewsletterView() {
         const data = await res.json();
         setAllCustomers(data.customers);
         setSegments(data.segments || { areas: [], clientTypes: [] });
+        setCustomersSyncedAt(data.syncedAt || null);
 
         if (sync) {
           setSendResult({
@@ -513,6 +517,9 @@ export default function NewsletterView() {
         selectedPatterns.includes(c.pattern || 'Okänd historik'),
       );
     }
+    if (selectedSubscriptions.length > 0) {
+      filtered = filtered.filter((c) => selectedSubscriptions.includes(c.subscription));
+    }
     const emails = filtered.map((c: any) => c.email);
     setRecipients([...new Set(emails)]);
     setSendResult({
@@ -534,6 +541,11 @@ export default function NewsletterView() {
   const toggleService = (svc: string) => {
     setSelectedServices((prev) =>
       prev.includes(svc) ? prev.filter((s) => s !== svc) : [...prev, svc],
+    );
+  };
+  const toggleSubscription = (s: string) => {
+    setSelectedSubscriptions((prev) =>
+      prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s],
     );
   };
   const togglePattern = (p: string) => {
@@ -1491,10 +1503,40 @@ export default function NewsletterView() {
                     </div>
                   )}
 
+                  {/* Abonnemang — aktiva vs avslutade återkommande kunder */}
+                  {segments.subscriptions && segments.subscriptions.length > 0 && (
+                    <div>
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-2">
+                        Filtrera efter Abonnemang
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {segments.subscriptions.map((s) => (
+                          <button
+                            key={s.name}
+                            onClick={() => toggleSubscription(s.name)}
+                            className={cn(
+                              "px-2.5 py-1 rounded-lg text-xs font-medium transition-all border",
+                              selectedSubscriptions.includes(s.name)
+                                ? "bg-brand-dark text-white border-brand-dark"
+                                : "bg-white text-brand-muted border-gray-200 hover:border-gray-300",
+                            )}
+                          >
+                            {s.name} <span className="opacity-60">({s.count})</span>
+                          </button>
+                        ))}
+                      </div>
+                      <p className="mt-1 text-[10px] text-gray-400 italic">
+                        "Aktiv" = återkommande städning bokad de senaste 45 dagarna eller kommande 90 dagarna. "Avslutad" = har haft återkommande städning de senaste 24 månaderna men inte längre.
+                        {customersSyncedAt && ` Senast synkad ${new Date(customersSyncedAt).toLocaleDateString("sv-SE")}.`}
+                      </p>
+                    </div>
+                  )}
+
                   {(selectedAreas.length > 0 ||
                     selectedTypes.length > 0 ||
                     selectedServices.length > 0 ||
-                    selectedPatterns.length > 0) && (
+                    selectedPatterns.length > 0 ||
+                    selectedSubscriptions.length > 0) && (
                     <div className="flex items-center gap-2 mt-4 pt-2 border-t border-gray-200">
                       <button
                         onClick={applySegments}
@@ -1508,6 +1550,7 @@ export default function NewsletterView() {
                           setSelectedTypes([]);
                           setSelectedServices([]);
                           setSelectedPatterns([]);
+                          setSelectedSubscriptions([]);
                         }}
                         className="text-xs text-gray-400 hover:text-red-500"
                       >

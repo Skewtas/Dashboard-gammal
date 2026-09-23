@@ -53,7 +53,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await prisma.automatedTemplate.upsert({
         where: { id: 'system_contacts' },
         create: { id: 'system_contacts', subject: 'SYSTEM_CONTACTS', blocks: { customers: newContactsList } as any },
-        update: { blocks: { customers: newContactsList } as any }
+        update: { blocks: { ...((doc?.blocks as any) || {}), customers: newContactsList } as any }
       });
 
       return res.json({ success: true, added: addedLines, total: newContactsList.length });
@@ -72,11 +72,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Ladda den befintliga databasen
     const doc = await prisma.automatedTemplate.findUnique({ where: { id: 'system_contacts' } });
     let dbContacts: any[] = (doc?.blocks as any)?.customers || [];
+    let syncedAt: string | null = (doc?.blocks as any)?.syncedAt || null;
 
     if (sync || dbContacts.length === 0) {
       // Synkronisera från Timewave
       const twCustomers = await getTimewaveCustomers();
       const dbMap = new Map(dbContacts.map(c => [c.email.toLowerCase(), c]));
+      // Abonnemangsstatus sätts om från grunden vid varje synk, så att en kund
+      // som tagits bort i Timewave inte ligger kvar som "Aktiv".
+      dbContacts.forEach(c => { delete c.subscription; });
 
       // Uppdatera eller lägg till de från Timewave
       twCustomers.forEach((twContact: any) => {
@@ -91,6 +95,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           existing.area = twContact.area;
           existing.serviceTypes = twContact.serviceTypes;
           existing.pattern = twContact.pattern;
+          existing.subscription = twContact.subscription;
           existing.totalMissions = twContact.totalMissions;
           existing.recurringMissions = twContact.recurringMissions;
           existing.source = 'timewave';
@@ -101,12 +106,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
 
       dbContacts = Array.from(dbMap.values());
+      syncedAt = new Date().toISOString();
 
       // Spara tillbaka till databasen
       await prisma.automatedTemplate.upsert({
         where: { id: 'system_contacts' },
-        create: { id: 'system_contacts', subject: 'SYSTEM_CONTACTS', blocks: { customers: dbContacts } as any },
-        update: { blocks: { customers: dbContacts } as any }
+        create: { id: 'system_contacts', subject: 'SYSTEM_CONTACTS', blocks: { customers: dbContacts, syncedAt } as any },
+        update: { blocks: { customers: dbContacts, syncedAt } as any }
       });
     }
 
@@ -120,6 +126,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const typeCounts: Record<string, number> = {};
     const serviceCounts: Record<string, number> = {};
     const patternCounts: Record<string, number> = {};
+    const subscriptionCounts: Record<string, number> = {};
     
     // Check for internal team members
     const internalKeywords = ['emma selenius', 'mikaela wigert', 'rani shakir', 'annika wigert', '@stodona.se'];
@@ -131,6 +138,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       c.serviceTypes.forEach((s: string) => serviceCounts[s] = (serviceCounts[s] || 0) + 1);
       const pat = c.pattern || 'Okänd historik';
       patternCounts[pat] = (patternCounts[pat] || 0) + 1;
+      if (c.subscription) subscriptionCounts[c.subscription] = (subscriptionCounts[c.subscription] || 0) + 1;
 
       const isInternal = internalKeywords.some(kw => c.name.toLowerCase().includes(kw) || c.email.toLowerCase().includes(kw));
       if (isInternal) {
@@ -149,11 +157,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.json({
       customers: uniqueCustomers,
       total: uniqueCustomers.length,
+      syncedAt,
       segments: {
         areas: Object.entries(areaCounts).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
         clientTypes: Object.entries(typeCounts).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
         serviceTypes: Object.entries(serviceCounts).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
         patterns: Object.entries(patternCounts).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
+        subscriptions: Object.entries(subscriptionCounts).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
       }
     });
   } catch (err: any) {

@@ -17,9 +17,17 @@ export interface TimewaveCustomer {
   // enbart haft engångsuppdrag. "Okänd historik" = vi hittade inga missions
   // (nyregistrerad eller ej bokad under lookback-fönstret).
   pattern?: 'Återkommande' | 'Engångskunder' | 'Okänd historik';
+  // Abonnemang — "Aktiv" = har återkommande städning just nu (se
+  // SUBSCRIPTION_LOOKBACK_DAYS/LOOKAHEAD_DAYS). "Avslutad" = har haft
+  // återkommande städning de senaste 24 mån men inte längre. Saknas = aldrig
+  // haft abonnemang, eller statusen kunde inte hämtas.
+  subscription?: 'Aktiv' | 'Avslutad';
   totalMissions?: number;
   recurringMissions?: number;
 }
+
+const SUBSCRIPTION_LOOKBACK_DAYS = 45;
+const SUBSCRIPTION_LOOKAHEAD_DAYS = 90;
 
 /** Normalize Swedish phone to E.164 (+46...) */
 function normalizePhone(raw: string | undefined | null): string | null {
@@ -131,6 +139,61 @@ export async function getTimewaveCustomers(): Promise<TimewaveCustomer[]> {
     console.error('customers: mission-fetch failed, pattern falls back to Okänd historik', err.message);
   }
 
+  // ----- Abonnemangsstatus: vilka har återkommande städning just nu? -----
+  // "Aktiv" = minst ett icke-avbokat återkommande uppdrag i fönstret
+  // [idag - 45 d, idag + 90 d]. 45 d bakåt täcker månadskunder vars nästa
+  // tillfälle inte hunnit läggas ut; 90 d framåt fångar det som redan är
+  // inbokat. Timewaves list-endpoint saknar datum per mission, så vi filtrerar
+  // på fönstret i anropet i stället för per uppdrag.
+  //
+  // Till skillnad från historiken ovan tolereras INGA sidfel här: en tappad
+  // sida skulle göra aktiva kunder till "Avslutad" och få dem att hamna i fel
+  // utskick. Går något fel lämnas statusen tom för alla, så att båda
+  // segmenten blir tomma i stället för felaktiga.
+  const activeFrom = new Date(now);
+  activeFrom.setDate(activeFrom.getDate() - SUBSCRIPTION_LOOKBACK_DAYS);
+  const activeTo = new Date(now);
+  activeTo.setDate(activeTo.getDate() + SUBSCRIPTION_LOOKAHEAD_DAYS);
+  const activeUrlBase = `${timewaveBaseUrl}/missions?filter[startdate]=${activeFrom.toISOString().slice(0, 10)}&filter[enddate]=${activeTo.toISOString().slice(0, 10)}&page[size]=200`;
+  const fetchActivePage = async (p: number, retry = true): Promise<any> => {
+    let r = await fetch(`${activeUrlBase}&page[number]=${p}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+    });
+    if (r.status === 403 && retry) {
+      token = await forceRefreshTimewaveToken();
+      return fetchActivePage(p, false);
+    }
+    if (r.status === 429) {
+      await new Promise((res) => setTimeout(res, 1000));
+      r = await fetch(`${activeUrlBase}&page[number]=${p}`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+      });
+    }
+    if (!r.ok) throw new Error(`Timewave missions (abonnemang) sida ${p} → ${r.status}`);
+    return r.json();
+  };
+
+  let activeSubscriptionClients: Set<string> | null = new Set();
+  try {
+    const collect = (data: any) => {
+      for (const m of data?.data || []) {
+        if (m.cancelled === 1 || m.type !== 'reccurent' || !m.client?.id) continue;
+        activeSubscriptionClients!.add(String(m.client.id));
+      }
+    };
+    const first = await fetchActivePage(1);
+    collect(first);
+    const lastPage = first.last_page || 1;
+    for (let p = 2; p <= lastPage; p += 4) {
+      const batch: number[] = [];
+      for (let i = 0; i < 4 && p + i <= lastPage; i++) batch.push(p + i);
+      (await Promise.all(batch.map((pn) => fetchActivePage(pn)))).forEach(collect);
+    }
+  } catch (err: any) {
+    console.error('customers: abonnemangsstatus kunde inte hämtas, lämnas tom', err.message);
+    activeSubscriptionClients = null;
+  }
+
   const ordersResp = await fetch(`${timewaveBaseUrl}/orders?page[size]=1000`, {
     headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }
   });
@@ -234,6 +297,12 @@ export async function getTimewaveCustomers(): Promise<TimewaveCustomer[]> {
         pattern = stats.recurring > 0 ? 'Återkommande' : 'Engångskunder';
       }
 
+      let subscription: TimewaveCustomer['subscription'];
+      if (activeSubscriptionClients) {
+        if (activeSubscriptionClients.has(String(c.id))) subscription = 'Aktiv';
+        else if ((stats?.recurring ?? 0) > 0) subscription = 'Avslutad';
+      }
+
       return {
         id: c.id,
         name: (c.first_name && c.last_name) ? `${c.first_name} ${c.last_name}` : c.company_name || c.first_name || '',
@@ -247,6 +316,7 @@ export async function getTimewaveCustomers(): Promise<TimewaveCustomer[]> {
         personalNumber: c.personal_number || c.ssn || c.social_security_number || c.registration_number || c.national_id || c.org_number || null,
         createdAt: c.created_at || new Date().toISOString(),
         pattern,
+        subscription,
         totalMissions: stats?.total ?? 0,
         recurringMissions: stats?.recurring ?? 0,
       };
@@ -265,6 +335,10 @@ export async function getTimewaveCustomers(): Promise<TimewaveCustomer[]> {
       existing.recurringMissions = (existing.recurringMissions ?? 0) + (c.recurringMissions ?? 0);
       if (existing.totalMissions > 0) {
         existing.pattern = existing.recurringMissions > 0 ? 'Återkommande' : 'Engångskunder';
+      }
+      // Har någon delkund ett pågående abonnemang är adressen aktiv.
+      if (existing.subscription !== 'Aktiv' && c.subscription) {
+        existing.subscription = c.subscription;
       }
     }
   });
