@@ -289,6 +289,17 @@ function DialogSokning() {
     return () => clearTimeout(t);
   }, [q, dagar]);
 
+  // Live: hämta listan igen var 30:e sekund medan fliken är öppen och synlig.
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      const params = new URLSearchParams({ dagar: String(dagar) });
+      if (q.trim()) params.set('q', q.trim());
+      api<DialogSvar>(`/api/chatt/dialoger?${params}`).then(setData).catch(() => {});
+    }, 30_000);
+    return () => clearInterval(id);
+  }, [q, dagar]);
+
   const expandera = async (id: string) => {
     if (oppen === id) { setOppen(null); return; }
     setOppen(id);
