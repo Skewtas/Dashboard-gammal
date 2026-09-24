@@ -632,8 +632,17 @@ export default function NewsletterView() {
       return;
     }
 
-    const willSendEmail = sendChannel === "email" || sendChannel === "both";
-    const willSendSms = sendChannel === "sms" || sendChannel === "both";
+    // Nyhetsbrev och SMS är ALLTID separata utskick. Ett nyhetsbrev får
+    // aldrig dra med sig ett SMS - därför finns inget "Båda"-val längre.
+    if (sendChannel === "both") {
+      setSendResult({
+        success: false,
+        message: "E-post och SMS skickas var för sig. Välj E-post eller SMS.",
+      });
+      return;
+    }
+    const willSendEmail = sendChannel === "email";
+    const willSendSms = sendChannel === "sms";
 
     if (willSendEmail) {
       if (!subject.trim()) {
@@ -669,6 +678,31 @@ export default function NewsletterView() {
         success: false,
         message: "Inga valda mottagare har telefonnummer.",
       });
+      return;
+    }
+
+    // Förklara exakt vad som skickas, hur och till vilka innan något går ut.
+    const when =
+      scheduleEnabled && scheduledFor
+        ? `schemalagt ${new Date(scheduledFor).toLocaleString("sv-SE")}`
+        : "direkt när du klickar OK";
+    const summary = willSendEmail
+      ? [
+          "KANAL: E-post (inget SMS skickas)",
+          `ÄMNESRAD: "${subject.trim()}"`,
+          `TILL: ${emailRecipients.length} e-postadresser (avregistrerade och spärrade filtreras bort)`,
+          `NÄR: ${when}`,
+          reminderEnabled
+            ? `PÅMINNELSE: e-post till dem som inte öppnat${reminderScheduledFor ? `, ${new Date(reminderScheduledFor).toLocaleString("sv-SE")}` : ""}`
+            : "PÅMINNELSE: nej",
+        ]
+      : [
+          "KANAL: SMS (ingen e-post skickas)",
+          `TEXT: "${smsMessage.trim().slice(0, 200)}${smsMessage.trim().length > 200 ? "…" : ""}"`,
+          `TILL: ${smsRecipients.length} telefonnummer`,
+          "NÄR: direkt när du klickar OK",
+        ];
+    if (!window.confirm(`Det här skickas:\n\n${summary.join("\n")}\n\nDet går inte att ångra. Skicka?`)) {
       return;
     }
 
@@ -1161,7 +1195,6 @@ export default function NewsletterView() {
           {[
             { value: "email" as SendChannel, icon: Mail, label: "E-post" },
             { value: "sms" as SendChannel, icon: Smartphone, label: "SMS" },
-            { value: "both" as SendChannel, icon: Send, label: "Båda" },
           ].map((ch) => (
             <button
               key={ch.value}
