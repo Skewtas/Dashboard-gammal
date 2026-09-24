@@ -3,9 +3,11 @@ import { getTimewaveCustomers } from '../_lib/timewaveData.js';
 import { prisma } from '../_lib/prisma.js';
 
 // Sync-vägen drar all klientlista (paginerad) + 24 mån missions för att
-// klassificera pattern → kan lätt ta 30+ s. Utan explicit maxDuration
-// använder Vercel default (10 s) och sync trunkeras tyst.
-export const config = { maxDuration: 60 };
+// klassificera pattern, plus alla återkommande uppdrag i abonnemangsfönstret.
+// Med 60 s dog synken med 504 innan den hann spara - syncedAt förblev null
+// och ingen kund fick abonnemangsstatus, så Marketings segment för aktiva
+// kunder blev alltid tomt. 300 s är Pro-planens tak.
+export const config = { maxDuration: 300 };
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'GET' && req.method !== 'POST') {
