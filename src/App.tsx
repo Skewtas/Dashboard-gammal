@@ -421,7 +421,14 @@ const OverviewView = () => {
   const [dailyDiff, setDailyDiff] = React.useState<DailyDiff | null>(null);
   const [bokisBookings, setBokisBookings] = React.useState<{
     today: number; thisWeek: number; thisMonth: number; total: number; cancelled: number;
+    recurringToday: number; recurringThisWeek: number; recurringThisMonth: number; recurringTotal: number;
   } | null>(null);
+  const [senasteAterkommande, setSenasteAterkommande] = React.useState<Array<{
+    id: string; createdAt: number | null; customerName: string; city: string | null;
+    service: string | null; frequency: string | null; sqm: number | null;
+    estimatedPrice: number | null; date: string | null;
+  }>>([]);
+  const [nyaSedanSenast, setNyaSedanSenast] = React.useState(0);
   const [revenueTrend, setRevenueTrend] = React.useState<{
     days: number;
     todayDate: string;
@@ -448,10 +455,32 @@ const OverviewView = () => {
       .catch(() => {});
   }, []);
   React.useEffect(() => {
-    fetch('/api/dashboard/bokis-bookings')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (d && d.totals) setBokisBookings(d.totals); })
-      .catch(() => {});
+    // Live-poll var 30 sekund så nya återkommande bokningar dyker upp
+    // inom ~60-90 sekunder efter kunden bokade.
+    const senastKandaId = { current: null as string | null };
+    const hamta = () => {
+      fetch('/api/dashboard/bokis-bookings')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (!d) return;
+          if (d.totals) setBokisBookings(d.totals);
+          if (Array.isArray(d.senasteAterkommande)) {
+            const lista = d.senasteAterkommande;
+            // Räkna nya sedan senaste hämtning
+            if (senastKandaId.current && lista.length > 0) {
+              const idx = lista.findIndex((x: any) => x.id === senastKandaId.current);
+              const nya = idx === -1 ? lista.length : idx;
+              if (nya > 0) setNyaSedanSenast((n) => n + nya);
+            }
+            if (lista.length > 0) senastKandaId.current = lista[0].id;
+            setSenasteAterkommande(lista);
+          }
+        })
+        .catch(() => {});
+    };
+    hamta();
+    const timer = setInterval(hamta, 30_000);
+    return () => clearInterval(timer);
   }, []);
   React.useEffect(() => {
     fetch('/api/dashboard/staff-occupancy')
@@ -730,6 +759,92 @@ const OverviewView = () => {
           </Card>
         ))}
       </div>
+
+      {/* LIVE — återkommande bokningar som just kommit in */}
+      <Card>
+        <CardContent className="p-5">
+          <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+            <div className="flex items-center gap-2">
+              <span className="relative flex h-2.5 w-2.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+              </span>
+              <div>
+                <h4 className="text-sm font-semibold text-brand-dark">Återkommande bokningar — LIVE</h4>
+                <p className="text-[11px] text-brand-muted mt-0.5">Uppdateras var 30 sek · källa Bokis</p>
+              </div>
+            </div>
+            {nyaSedanSenast > 0 && (
+              <button
+                onClick={() => setNyaSedanSenast(0)}
+                className="text-[11px] px-2 py-1 rounded-full bg-emerald-100 text-emerald-800 font-semibold hover:bg-emerald-200"
+                title="Klicka för att nollställa räknaren"
+              >
+                {nyaSedanSenast} ny{nyaSedanSenast === 1 ? '' : 'a'} sedan senast · klicka för att nollställa
+              </button>
+            )}
+          </div>
+
+          {/* KPI-rad över återkommande */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+            {[
+              { label: 'Idag', value: bokisBookings?.recurringToday ?? 0, accent: 'text-emerald-600' },
+              { label: 'Denna vecka', value: bokisBookings?.recurringThisWeek ?? 0, accent: 'text-brand-dark' },
+              { label: 'Denna månad', value: bokisBookings?.recurringThisMonth ?? 0, accent: 'text-brand-dark' },
+              { label: 'Totalt', value: bokisBookings?.recurringTotal ?? 0, accent: 'text-brand-muted' },
+            ].map((k) => (
+              <div key={k.label} className="bg-white border border-gray-100 rounded-xl p-3 text-center">
+                <div className={`text-2xl font-semibold tabular-nums ${k.accent}`}>{k.value}</div>
+                <div className="text-[10px] text-brand-muted uppercase tracking-wider mt-0.5">{k.label}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Senaste 10 återkommande */}
+          <div className="space-y-1.5">
+            <div className="text-[10px] uppercase tracking-wider text-brand-muted font-semibold mb-2">
+              Senaste 10 återkommande bokningarna
+            </div>
+            {senasteAterkommande.length === 0 ? (
+              <div className="text-sm text-brand-muted italic py-4 text-center">
+                Väntar på nästa återkommande bokning…
+              </div>
+            ) : (
+              <ul className="divide-y divide-gray-100">
+                {senasteAterkommande.map((b) => {
+                  const naNu = b.createdAt ? Date.now() - b.createdAt : null;
+                  const relTid = naNu === null ? '' :
+                    naNu < 60_000 ? 'nyss' :
+                    naNu < 3600_000 ? `${Math.round(naNu / 60_000)} min sen` :
+                    naNu < 86400_000 ? `${Math.round(naNu / 3600_000)} tim sen` :
+                    `${Math.round(naNu / 86400_000)} d sen`;
+                  return (
+                    <li key={b.id} className="flex items-start gap-3 py-2 text-sm">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-brand-dark font-medium truncate">{b.customerName}</div>
+                        <div className="text-[11px] text-brand-muted flex flex-wrap gap-x-2 gap-y-0.5 mt-0.5">
+                          {b.service && <span>{b.service}</span>}
+                          {b.frequency && <span>· {b.frequency}</span>}
+                          {b.city && <span>· {b.city}</span>}
+                          {b.sqm != null && <span>· {b.sqm} kvm</span>}
+                        </div>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        {b.estimatedPrice != null && (
+                          <div className="text-sm font-semibold text-brand-dark tabular-nums">
+                            {new Intl.NumberFormat('sv-SE').format(Math.round(b.estimatedPrice))} kr
+                          </div>
+                        )}
+                        <div className="text-[10px] text-brand-muted tabular-nums">{relTid}</div>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Intäktstrend — senaste 7 dagarna med dygns-delta */}
       {revenueTrend && revenueTrend.rows.length > 0 && (

@@ -17,7 +17,10 @@ import { prisma } from '../_lib/prisma.js';
 export const config = { maxDuration: 30 };
 
 const KEY = 'bokis_bookings_counts';
-const STALE_MINUTES = 15;
+// 60 sekunder cache — så "LIVE återkommande" känns live men vi inte pumpar
+// Convex vid varje polling. Frontend pollar var 30 sekund → ny bokning
+// dyker upp inom ~60-90 s.
+const STALE_SECONDS = 60;
 
 function ymdSthlm(d: Date): string {
   const parts = new Intl.DateTimeFormat('sv-SE', {
@@ -38,9 +41,26 @@ type BokisBooking = {
   service?: string;
   date?: string;         // t.ex. "2026-09-06"
   status?: string;
+  frequency?: string;    // "Varje vecka" | "Varannan vecka" | "Var tredje vecka" | "Var fjärde vecka" | "Engång"
+  firstName?: string;
+  lastName?: string;
+  customerName?: string;
+  city?: string;
+  estimatedPrice?: number;
+  sqm?: number;
   createdAt?: number;    // convex _creationTime ms
   _creationTime?: number;
 };
+
+const RECURRING_FREQ = new Set([
+  'Varje vecka',
+  'Varannan vecka',
+  'Var tredje vecka',
+  'Var fjärde vecka',
+]);
+function isRecurring(b: BokisBooking): boolean {
+  return !!b.frequency && RECURRING_FREQ.has(b.frequency);
+}
 
 async function fetchBokisBookings(): Promise<BokisBooking[]> {
   const url = process.env.BOKIS_CONVEX_URL;
@@ -87,20 +107,54 @@ function computeCounts(bookings: BokisBooking[]) {
   let total = 0;
   let cancelled = 0;
 
-  // Räkna baserat på _creationTime (när bokningen skapades) — inte städdatumet.
-  // Det är "bokningsflödet" som är intressant för trend/dashboards.
+  // Återkommande = abonnemang (veckovis/varannan vecka osv). Engångs-bokningar
+  // räknas separat så vi ser den viktigare KPI:n (abonnemang = intäkt över tid).
+  let recurringToday = 0;
+  let recurringThisWeek = 0;
+  let recurringThisMonth = 0;
+  let recurringTotal = 0;
+
   for (const b of bookings) {
     total++;
     if (b.status === 'cancelled') cancelled++;
+    const recurring = isRecurring(b);
+    if (recurring) recurringTotal++;
     const createdAt = b._creationTime ?? b.createdAt;
     if (!createdAt) continue;
     const createdKey = ymdSthlm(new Date(createdAt));
-    if (createdKey === todayKey) today++;
-    if (createdKey >= weekStartKey) thisWeek++;
-    if (monthKey(createdKey) === thisMonthKey) thisMonth++;
+    if (createdKey === todayKey) { today++; if (recurring) recurringToday++; }
+    if (createdKey >= weekStartKey) { thisWeek++; if (recurring) recurringThisWeek++; }
+    if (monthKey(createdKey) === thisMonthKey) {
+      thisMonth++; if (recurring) recurringThisMonth++;
+    }
   }
 
-  return { today, thisWeek, thisMonth, total, cancelled };
+  return {
+    today, thisWeek, thisMonth, total, cancelled,
+    recurringToday, recurringThisWeek, recurringThisMonth, recurringTotal,
+  };
+}
+
+/** De senaste N återkommande bokningarna för live-feed på dashboarden. */
+function latestRecurring(bookings: BokisBooking[], n: number) {
+  return bookings
+    .filter((b) => isRecurring(b) && b.status !== 'cancelled')
+    .sort((a, b) => (b._creationTime ?? b.createdAt ?? 0) - (a._creationTime ?? a.createdAt ?? 0))
+    .slice(0, n)
+    .map((b) => ({
+      id: b.id,
+      createdAt: b._creationTime ?? b.createdAt ?? null,
+      customerName:
+        b.customerName ||
+        [b.firstName, b.lastName].filter(Boolean).join(' ').trim() ||
+        'Okänd kund',
+      city: b.city || null,
+      service: b.service || null,
+      frequency: b.frequency || null,
+      sqm: b.sqm ?? null,
+      estimatedPrice: b.estimatedPrice ?? null,
+      date: b.date || null,
+    }));
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -110,8 +164,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const snap = await prisma.dashboardSnapshot.findUnique({ where: { key: KEY } });
     if (snap && snap.data) {
       const ageMs = Date.now() - snap.computedAt.getTime();
-      if (ageMs < STALE_MINUTES * 60_000) {
-        return res.json({ ...(snap.data as any), cached: true, ageMinutes: Math.round(ageMs / 60000) });
+      if (ageMs < STALE_SECONDS * 1000) {
+        return res.json({ ...(snap.data as any), cached: true, ageSeconds: Math.round(ageMs / 1000) });
       }
     }
   }
@@ -122,6 +176,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const payload = {
       source: 'bokis-convex',
       totals: counts,
+      senasteAterkommande: latestRecurring(bookings, 10),
       sampleSize: bookings.length,
       computedAt: new Date().toISOString(),
     };
